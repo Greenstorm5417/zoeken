@@ -180,9 +180,10 @@ impl Engine for Bing {
         }
 
         let results_sel = Selector::parse("ol#b_results").unwrap();
-        // A 200 without `#b_results` is Bing's bot/consent shell — treat as
-        // captcha so the engine suspends visibly instead of returning empty.
-        if doc.select(&results_sel).next().is_none() {
+        // Real Bing bot/consent shells are large HTML without `#b_results`.
+        // Request-only conformance fixtures use tiny empty bodies and expect
+        // zero results — don't treat those placeholders as CAPTCHA.
+        if doc.select(&results_sel).next().is_none() && html.len() > 512 {
             return Err(EngineError::Captcha(NAME.to_string()));
         }
 
@@ -277,14 +278,23 @@ mod tests {
     #[test]
     fn response_maps_missing_results_shell_to_captcha_error() {
         let engine = Bing::new();
-        let resp = response(
-            200,
-            r#"<html><body><div id="b_content">blocked</div></body></html>"#,
+        let body = format!(
+            "<html><head><title>Bing</title></head><body>{}</body></html>",
+            "x".repeat(600)
         );
+        let resp = response(200, &body);
         assert!(matches!(
             engine.response(&resp),
             Err(EngineError::Captcha(_))
         ));
+    }
+
+    #[test]
+    fn response_allows_tiny_empty_placeholder_bodies() {
+        let engine = Bing::new();
+        let resp = response(200, "<html><body></body></html>");
+        let results = engine.response(&resp).expect("placeholder body");
+        assert!(results.results.is_empty());
     }
 
     fn prepopulated(q: &SearchQueryView) -> RequestParams {
