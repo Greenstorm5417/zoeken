@@ -13,9 +13,8 @@ use ipnet::IpNet;
 use tower::util::BoxCloneService;
 use tower::{Layer, ServiceExt, service_fn};
 
-use zoeken_botdetect::{
-    BotDetectLayer, BotDetectService, Detector, LimiterConfig, RateLimitConfig,
-};
+use zoeken_botdetect::{Detector, LimiterConfig, RateLimitConfig};
+use zoeken_server::limiter::{BotDetectLayer, BotDetectService};
 
 async fn inner_ok(_req: Request<Body>) -> Result<Response, Infallible> {
     Ok((StatusCode::OK, "handler reached").into_response())

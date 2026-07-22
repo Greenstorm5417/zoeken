@@ -12,8 +12,9 @@ use zoeken_engine_core::{
     Engine, EngineError, EngineResponse, EngineResults, HttpMethod, Processor, RequestParams,
     SearchQueryView,
 };
+use zoeken_engines::engines::soundcloud;
 use zoeken_network::{DEFAULT_NETWORK, NetworkError, NetworkManager, NetworkRequest};
-use zoeken_search::{EngineExecResult, EngineExecutor, EngineFuture};
+use zoeken_search::{EngineExecResult, EngineExecutor, EngineFuture, SuspensionPolicy};
 
 use crate::engine_health::{PendingHealth, circuit_is_open, record_health};
 use crate::outbound_cache::{
@@ -26,6 +27,7 @@ pub struct NetworkExecutor {
     engine_networks: HashMap<String, String>,
     max_response_bytes: usize,
     response_cache: Arc<ResponseCache>,
+    health_policy: SuspensionPolicy,
 }
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
@@ -41,6 +43,7 @@ impl NetworkExecutor {
                 Duration::from_secs(300),
                 128 * 1024 * 1024,
             )),
+            health_policy: SuspensionPolicy::default(),
         }
     }
 
@@ -65,6 +68,12 @@ impl NetworkExecutor {
         self.response_cache = Arc::new(ResponseCache::new(html_ttl, structured_ttl, max_bytes));
         self
     }
+
+    #[must_use]
+    pub fn with_health_policy(mut self, health_policy: SuspensionPolicy) -> Self {
+        self.health_policy = health_policy;
+        self
+    }
 }
 
 impl EngineExecutor for NetworkExecutor {
@@ -74,6 +83,7 @@ impl EngineExecutor for NetworkExecutor {
         let engine_networks = self.engine_networks.clone();
         let max_response_bytes = self.max_response_bytes;
         let response_cache = self.response_cache.clone();
+        let health_policy = self.health_policy;
         Box::pin(async move {
             let mut params = RequestParams {
                 query: query.query.clone(),
@@ -84,11 +94,24 @@ impl EngineExecutor for NetworkExecutor {
                 engine_data: query.engine_data.clone(),
                 ..RequestParams::default()
             };
-            if engine_name == "soundcloud"
-                && !params.engine_data.contains_key("client_id")
-                && let Some(id) = soundcloud_client_id(&networks).await
-            {
-                params.engine_data.insert("client_id".to_string(), id);
+            engine.prepare_request(&mut params);
+            if params.needs_client_id {
+                let networks = Arc::clone(&networks);
+                let _ = soundcloud::ensure_guest_client_id(&mut params.engine_data, move |url| {
+                    let networks = Arc::clone(&networks);
+                    let url = url.to_string();
+                    async move {
+                        let Ok(resp) = networks
+                            .request(soundcloud::NAME, NetworkRequest::get(url))
+                            .await
+                        else {
+                            return None;
+                        };
+                        resp.text().await.ok()
+                    }
+                })
+                .await;
+                params.needs_client_id = false;
             }
 
             engine.request(&query, &mut params);
@@ -163,6 +186,7 @@ impl EngineExecutor for NetworkExecutor {
                 storage.clone(),
                 engine_name.clone(),
                 previous_health.clone(),
+                health_policy,
             );
             let response = match networks.request(&network_name, request).await {
                 Ok(response) => response,
@@ -175,6 +199,7 @@ impl EngineExecutor for NetworkExecutor {
                         http_started.elapsed(),
                         &Err(mapped.clone()),
                         previous_health.as_ref(),
+                        &health_policy,
                     )
                     .await;
                     response_cache.finish_flight(&key);
@@ -194,6 +219,7 @@ impl EngineExecutor for NetworkExecutor {
                         http_started.elapsed(),
                         &Err(error.clone()),
                         previous_health.as_ref(),
+                        &health_policy,
                     )
                     .await;
                     response_cache.finish_flight(&key);
@@ -211,6 +237,7 @@ impl EngineExecutor for NetworkExecutor {
                 http_started.elapsed(),
                 &result,
                 previous_health.as_ref(),
+                &health_policy,
             )
             .await;
             if result.is_ok() && response_is_cacheable(&engine_response) {
@@ -369,72 +396,6 @@ async fn adapt_response(
     })
 }
 
-/// Fetch SoundCloud's guest `client_id` once per process (cached), mirroring the reference `get_client_id`.
-async fn soundcloud_client_id(networks: &NetworkManager) -> Option<String> {
-    static CACHE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
-    CACHE
-        .get_or_try_init(|| fetch_soundcloud_client_id(networks))
-        .await
-        .ok()
-        .cloned()
-}
-
-/// Scrape the SoundCloud web app and its JS assets for a guest `client_id`.
-async fn fetch_soundcloud_client_id(networks: &NetworkManager) -> Result<String, ()> {
-    let home = networks
-        .request("soundcloud", NetworkRequest::get("https://soundcloud.com/"))
-        .await
-        .map_err(|_| ())?;
-    let html = home.text().await.map_err(|_| ())?;
-
-    for asset_url in soundcloud_asset_urls(&html) {
-        let Ok(resp) = networks
-            .request("soundcloud", NetworkRequest::get(asset_url))
-            .await
-        else {
-            continue;
-        };
-        let Ok(js) = resp.text().await else {
-            continue;
-        };
-        if let Some(id) = extract_client_id(&js) {
-            return Ok(id);
-        }
-    }
-    Err(())
-}
-
-/// The SoundCloud web-app JS asset URLs referenced in the home page HTML.
-fn soundcloud_asset_urls(html: &str) -> Vec<String> {
-    const PREFIX: &str = "https://a-v2.sndcdn.com/assets/";
-    let mut urls = Vec::new();
-    let mut rest = html;
-    while let Some(pos) = rest.find(PREFIX) {
-        let after = &rest[pos..];
-        let end = after.find(['"', '\'']).unwrap_or(after.len());
-        let url = &after[..end];
-        if url.ends_with(".js") {
-            urls.push(url.to_string());
-        }
-        rest = &after[end..];
-    }
-    urls
-}
-
-/// Extract the `client_id:"..."` guest token from a SoundCloud JS asset body.
-fn extract_client_id(js: &str) -> Option<String> {
-    const KEY: &str = "client_id:\"";
-    let start = js.find(KEY)? + KEY.len();
-    let tail = &js[start..];
-    let end = tail.find('"')?;
-    let id = &tail[..end];
-    if id.len() >= 20 && id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        Some(id.to_string())
-    } else {
-        None
-    }
-}
-
 /// Map a [`NetworkError`] onto the engine error taxonomy so the suspend/penalty
 /// machine can classify access/rate-limit/CAPTCHA failures.
 fn map_network_error(error: NetworkError) -> EngineError {
@@ -455,6 +416,7 @@ fn map_network_error(error: NetworkError) -> EngineError {
 mod tests {
     use super::*;
     use crate::engine_health::cooldown_for;
+    use zoeken_search::SuspensionPolicy;
     use zoeken_storage::EngineHealthSnapshot;
 
     /// A `POST` engine request with form data and cookies is translated into a
@@ -575,15 +537,41 @@ mod tests {
     }
 
     #[test]
-    fn duckduckgo_challenge_has_jittered_minimum_cooldown() {
-        let cooldown = cooldown_for(
-            "duckduckgo",
-            &EngineError::Captcha("duckduckgo".into()),
-            None,
-        )
-        .unwrap();
-        assert!(cooldown >= Duration::from_secs(5 * 60));
-        assert!(cooldown <= Duration::from_secs(15 * 60));
+    fn duckduckgo_captcha_does_not_open_circuit() {
+        let policy = SuspensionPolicy::default();
+        assert_eq!(
+            cooldown_for(
+                "duckduckgo",
+                &EngineError::Captcha("duckduckgo".into()),
+                None,
+                &policy,
+            ),
+            None
+        );
+        // Network transport captchas stringify to a message, not the engine id.
+        assert_eq!(
+            cooldown_for(
+                "duckduckgo",
+                &EngineError::Captcha("captcha: challenge".into()),
+                None,
+                &policy,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn captcha_uses_suspended_times_duration() {
+        let policy = SuspensionPolicy::default();
+        assert_eq!(
+            cooldown_for(
+                "bing",
+                &EngineError::Captcha("bing".into()),
+                None,
+                &policy,
+            ),
+            Some(policy.captcha)
+        );
     }
 
     #[test]
@@ -597,13 +585,15 @@ mod tests {
             cooldown_until_ms: None,
             last_error_category: Some("rate_limited".into()),
         };
+        let policy = SuspensionPolicy::default();
         assert_eq!(
             cooldown_for(
                 "qwant",
                 &EngineError::TooManyRequests("qwant".into()),
-                Some(&previous)
+                Some(&previous),
+                &policy,
             ),
-            Some(Duration::from_secs(10 * 60))
+            Some(policy.too_many_requests.saturating_mul(2))
         );
     }
 

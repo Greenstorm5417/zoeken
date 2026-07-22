@@ -209,7 +209,6 @@ general:
 brand:
   issue_url: "https://example.test/issues"
   docs_url: "https://example.test/docs"
-  new_issue_url: "https://example.test/new"
 search:
   safe_search: 1
   autocomplete: "google"
@@ -274,7 +273,6 @@ fn full_schema_load_populates_general_brand_search_server_ui() {
 
     assert_eq!(s.brand.issue_url, "https://example.test/issues");
     assert_eq!(s.brand.docs_url, "https://example.test/docs");
-    assert_eq!(s.brand.new_issue_url, "https://example.test/new");
 
     assert_eq!(s.search.safe_search, 1);
     assert_eq!(s.search.autocomplete, "google");
@@ -387,10 +385,6 @@ fn packaged_debian_settings_yml_loads() {
     assert_eq!(
         settings.limiter.get("file").and_then(|v| v.as_str()),
         Some("/etc/zoeken/limiter.toml")
-    );
-    assert_eq!(
-        settings.lua_plugins.directory.as_deref(),
-        Some("/usr/share/zoeken/plugins")
     );
     assert!(
         settings.engines.is_empty(),

@@ -75,22 +75,19 @@ impl Search {
         available_tokens: &HashSet<String>,
     ) -> ExecutionReport {
         let now = Instant::now();
-        let selected = self.registry.select(query, prefs, available_tokens, now);
+        let selected = self.registry.select(query, prefs, available_tokens);
 
         let view = search_query_view(query);
         let deadline = now + self.request_timeout(query);
 
-        let report = run_engines(
+        run_engines(
             self.executor.clone(),
             selected,
             view,
             self.config.default_engine_timeout,
             deadline,
         )
-        .await;
-        self.registry
-            .record_outcomes(&report, &self.config.suspension, Instant::now());
-        report
+        .await
     }
 
     pub async fn run<P: EnginePreferences + ?Sized>(
@@ -100,28 +97,9 @@ impl Search {
         available_tokens: &HashSet<String>,
         recorder: &dyn MetricsRecorder,
     ) -> ResultContainer {
-        let now = Instant::now();
         let report = self.run_engines(query, prefs, available_tokens).await;
         let weights = self.engine_weights();
-        let mut container = aggregate(report, &weights, recorder);
-        for (engine, category, message) in
-            self.registry
-                .suspended_for_query(query, prefs, available_tokens, now)
-        {
-            if container
-                .unresponsive_engines
-                .iter()
-                .any(|entry| entry.engine == engine)
-            {
-                continue;
-            }
-            container.unresponsive_engines.push(UnresponsiveEngine {
-                engine,
-                cause: UnresponsiveCause::Error { category, message },
-            });
-        }
-
-        container
+        aggregate(report, &weights, recorder)
     }
 
     pub fn engine_weights(&self) -> EngineWeights {

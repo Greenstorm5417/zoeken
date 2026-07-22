@@ -91,9 +91,9 @@ export type Config = {
 	doi_resolvers: string[];
 	doi_resolver_urls: Record<string, string>;
 	default_doi_resolver: string;
+	using_tor_proxy?: boolean;
 	categories_as_tabs?: string[];
 	ui?: {
-		center_alignment: boolean;
 		results_on_new_tab: boolean;
 		query_in_title: boolean;
 		cache_url: string;

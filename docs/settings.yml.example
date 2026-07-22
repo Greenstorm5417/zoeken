@@ -32,9 +32,6 @@ general:
 brand:
   issue_url: "https://github.com/Greenstorm5417/zoeken/issues"
   docs_url: "https://github.com/Greenstorm5417/zoeken#readme"
-  public_instances: ""
-  wiki_url: false
-  new_issue_url: "https://github.com/Greenstorm5417/zoeken/issues/new"
   custom:
     links: {}
     # Example:
@@ -65,6 +62,14 @@ search:
   languages: []
   ban_time_on_fail: 5.0
   max_ban_time_on_fail: 120.0
+  # Engine catalog policy when `engines:` is non-empty:
+  #   replace (default) — ONLY the engines you list are registered.
+  #   merge              — overlay listed engines onto the built-in catalog
+  #                        (omit an engine to keep its default enable/disable).
+  # Empty `engines:` always uses the built-in catalog regardless of this mode.
+  engine_list_mode: replace
+  # Durations below feed the durable storage circuit cooldown policy
+  # (sole engine-health gate). DuckDuckGo captcha never opens a circuit.
   suspended_times:
     SearxEngineAccessDenied: 86400.0
     SearxEngineCaptcha: 86400.0
@@ -104,6 +109,8 @@ server:
   # Example:
   # default_http_headers:
   #   X-Robots-Tag: "noindex, nofollow"
+  # JSON-only: skip SPA index.html boot check (also APP_DISABLE_UI=1).
+  disable_ui: false
 
 # ---------------------------------------------------------------------------
 # deployment (process hardening / reverse-proxy trust)
@@ -136,7 +143,6 @@ ui:
   theme_args:
     # auto | light | dark | black  (SPA still follows OS prefers-color-scheme)
     simple_style: "auto"
-  center_alignment: false
   results_on_new_tab: false
   query_in_title: false
   cache_url: ""
@@ -153,6 +159,7 @@ outgoing:
   useragent_suffix: ""
   request_timeout: 3.0
   enable_http2: true
+  # true only — verify: false and custom CA paths are rejected at boot
   verify: true
   max_request_timeout: null
   # Reject larger engine responses before buffering them in memory.
@@ -197,16 +204,20 @@ outgoing:
 # ---------------------------------------------------------------------------
 # engines
 #
-# Empty list → built-in default catalog (common engines enabled; the rest
-# available but disabled until toggled in preferences / listed here).
+# POLICY (search.engine_list_mode):
+#   Empty list  → built-in default catalog (common engines enabled; the rest
+#                 available but disabled until toggled in preferences).
+#   replace     → DEFAULT. A non-empty list FULLY REPLACES the built-in set.
+#                 Engines you omit are not registered at all.
+#   merge       → Overlay: listed entries update/add by engine id; omitted
+#                 defaults stay. Prefer this when you only need a few overrides.
 #
-# Non-empty list → ONLY the engines you list are registered.
 # Typed fields: name, engine, shortcut, categories, timeout, disabled,
 # weight, tokens, network, inactive. Any other key is engine-specific
 # (base_url, xpath/json generic fields, …).
 # ---------------------------------------------------------------------------
 engines: []
-# Example overrides (uncomment + set engines: to a non-empty list to use):
+# Example (replace mode — only these three engines exist after boot):
 # engines:
 #   - name: duckduckgo
 #     engine: duckduckgo
@@ -224,6 +235,13 @@ engines: []
 #   - name: wikipedia
 #     engine: wikipedia
 #     disabled: false
+#
+# Example (merge mode — disable one default, keep the rest of the catalog):
+# search:
+#   engine_list_mode: merge
+# engines:
+#   - name: google
+#     disabled: true
 
 # ---------------------------------------------------------------------------
 # plugins (preference defaults for plugin toggles)
@@ -250,21 +268,6 @@ plugins:
     active: true
   unit_converter:
     active: true
-
-# ---------------------------------------------------------------------------
-# lua_plugins (load Lua plugins from disk)
-# ---------------------------------------------------------------------------
-lua_plugins:
-  enabled: true
-  # Debian packages plugins here; override if you install elsewhere.
-  directory: "/usr/share/zoeken/plugins"
-  # Empty = filesystem order; otherwise load in this order (stems without .lua)
-  order: []
-  # Example:
-  # order:
-  #   - tracker_url_remover
-  #   - hostnames
-  #   - calculator
 
 # ---------------------------------------------------------------------------
 # categories_as_tabs (SPA category tabs)

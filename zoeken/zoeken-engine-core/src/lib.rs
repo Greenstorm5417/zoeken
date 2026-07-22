@@ -1,8 +1,8 @@
-//! Engine trait, processors, suspend/penalty state machine, and parsing helpers.
+//! Engine trait, processors, health-related config types, and parsing helpers.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -132,6 +132,10 @@ pub struct RequestParams {
     /// "no preference, use network config."
     #[serde(default)]
     pub disable_redirects: bool,
+    /// Set by [`Engine::prepare_request`] when a guest `client_id` must be
+    /// bootstrapped (via engine-owned scrape helpers) before `request` runs.
+    #[serde(default, skip_serializing)]
+    pub needs_client_id: bool,
     pub auth: Option<String>,
     pub raise_for_httperror: bool,
     pub network: Option<String>,
@@ -158,6 +162,7 @@ impl Default for RequestParams {
             max_redirects: 0,
             soft_max_redirects: 0,
             disable_redirects: false,
+            needs_client_id: false,
             auth: None,
             raise_for_httperror: true,
             network: None,
@@ -269,10 +274,14 @@ pub enum EngineError {
 
 pub trait Engine: Send + Sync {
     fn metadata(&self) -> &EngineMeta;
+    /// Optional pre-request hook (e.g. mark bootstrap flags on `params`).
+    fn prepare_request(&self, _params: &mut RequestParams) {}
     fn request(&self, q: &SearchQueryView, p: &mut RequestParams);
     fn response(&self, resp: &EngineResponse) -> Result<EngineResults, EngineError>;
 }
 
+/// Ban / cooldown knobs shared by storage-circuit [`SuspensionPolicy`] policy
+/// (threshold + base/max ban windows).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuspendConfig {
     pub threshold: u32,
@@ -297,86 +306,6 @@ impl Default for SuspendConfig {
             base: Duration::from_secs(5),
             max: Duration::from_secs(120),
         }
-    }
-}
-
-pub fn suspend_duration(penalty_count: u32, base: Duration, max: Duration) -> Duration {
-    let base_nanos = base.as_nanos();
-    if base_nanos == 0 {
-        return Duration::ZERO;
-    }
-    let max_nanos = max.as_nanos();
-    let scaled = if penalty_count >= 128 || base_nanos.leading_zeros() < penalty_count {
-        u128::MAX
-    } else {
-        base_nanos << penalty_count
-    };
-    let capped = scaled.min(max_nanos);
-    let secs = (capped / 1_000_000_000) as u64;
-    let nanos = (capped % 1_000_000_000) as u32;
-    Duration::new(secs, nanos)
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct EngineState {
-    pub continuous_errors: u32,
-    pub suspend_end: Option<Instant>,
-    pub suspend_reason: Option<String>,
-    /// Same [`ErrorCategory`] vocabulary as metrics/storage health, so
-    /// suspend reasons don't drift into a fourth ad-hoc taxonomy.
-    pub suspend_category: Option<ErrorCategory>,
-}
-
-impl EngineState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn is_suspended(&self, now: Instant) -> bool {
-        match self.suspend_end {
-            Some(end) => now < end,
-            None => false,
-        }
-    }
-
-    pub fn on_success(&mut self) {
-        self.continuous_errors = 0;
-    }
-
-    pub fn on_error(
-        &mut self,
-        now: Instant,
-        cfg: &SuspendConfig,
-        reason: &str,
-        category: ErrorCategory,
-        explicit: Option<Duration>,
-    ) {
-        if self.is_suspended(now) {
-            return;
-        }
-        self.continuous_errors = self.continuous_errors.saturating_add(1);
-        match explicit {
-            Some(duration) => self.apply_suspension(now, duration, reason, category),
-            None => {
-                if cfg.threshold != 0 && self.continuous_errors >= cfg.threshold {
-                    let penalty = self.continuous_errors - cfg.threshold;
-                    let duration = suspend_duration(penalty, cfg.base, cfg.max);
-                    self.apply_suspension(now, duration, reason, category);
-                }
-            }
-        }
-    }
-
-    fn apply_suspension(
-        &mut self,
-        now: Instant,
-        duration: Duration,
-        reason: &str,
-        category: ErrorCategory,
-    ) {
-        self.suspend_end = Some(now + duration);
-        self.suspend_reason = Some(reason.to_string());
-        self.suspend_category = Some(category);
     }
 }
 

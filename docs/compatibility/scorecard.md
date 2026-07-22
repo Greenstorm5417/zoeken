@@ -10,7 +10,7 @@ CI validates this file exists via `--check`.
 | Engines | intentionally-skipped=40, ported=249 (total 289) |
 | Routes | ported=22, rust-only=3 (total 25) |
 | Data assets | present=12, unknown-upstream=1 (total 13) |
-| Lua plugins on disk | 11 (`ahmia_filter, calculator, hostnames, infinite_scroll, oa_doi_rewrite, self_info, time_zone, tor_check, tracker_url_remover, unit_converter, unit_converter_logic`) |
+| SPA client-features | 12 (`calculator, crypto, dateTime, doiRewrite, hostnames, random, selfInfo, statistics, timeZone, trackerUrlRemover, unitConverter`) |
 | Frontend | SPA (zoeken-client → zoeken-server/assets) |
 | Near-term target | API + admin/config compatibility (`targets.md`) |
 

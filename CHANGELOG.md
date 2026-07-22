@@ -5,6 +5,20 @@ All notable changes to Zoeken are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Engine health: storage circuit is the sole gate; `search.suspended_times` /
+  ban knobs feed circuit cooldown policy only (no in-process suspend).
+  DuckDuckGo captcha does not open a circuit (no durable IP ban).
+- `search.engine_list_mode`: `replace` (default) vs `merge` for non-empty
+  `engines:` lists — see settings examples and registry docs.
+- Former Lua/server plugins → SPA client-features; JSON/CSV/RSS stay raw
+  aggregation (except server-side `ahmia_filter` when Tor proxy is enabled).
+- Dropped unused brand settings: `public_instances`, `wiki_url`,
+  `new_issue_url` (still ignored if present in overlay YAML).
+
 ## [1.2.1] - 2026-07-21
 
 ### Fixed

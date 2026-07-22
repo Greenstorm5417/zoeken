@@ -36,7 +36,6 @@ pub struct DataBundle {
     pub engine_traits: EngineTraitsMap,
     pub useragents: UserAgentPool,
     pub locales: LocaleMap,
-    pub tracker_patterns: TrackerPatterns,
     pub ahmia_blacklist: AhmiaBlacklist,
     pub doi_resolvers: DoiResolvers,
     pub autocomplete: AutocompleteMetadata,
@@ -100,415 +99,6 @@ impl InfoPages {
                 .then(|| pages.get(page).map(|info| (candidate.as_str(), info)))
                 .flatten()
         })
-    }
-}
-
-/// Host matcher for a ClearURLs-style provider (compiled at build time).
-#[derive(Debug, Clone, Copy)]
-pub enum HostMatch {
-    Any,
-    Suffix(&'static str),
-    Label(&'static str),
-    AnySuffix(&'static [&'static str]),
-    Regex(&'static str),
-}
-
-/// One precompiled ClearURLs provider rule.
-#[derive(Debug, Clone)]
-pub struct CompiledTrackerRule {
-    pub url_pattern: &'static str,
-    pub host: HostMatch,
-    pub path_prefix: Option<&'static str>,
-    pub exact_params: &'static [&'static str],
-    pub prefix_params: &'static [&'static str],
-    pub regex_params: &'static [&'static str],
-    pub exception_regexes: &'static [&'static str],
-}
-
-/// Runtime tracker rule (static embed or disk override).
-#[derive(Debug)]
-pub struct TrackerRule {
-    pub url_pattern: String,
-    pub exceptions: Vec<String>,
-    pub rules: Vec<String>,
-    host_suffixes: Vec<String>,
-    host_label: Option<String>,
-    match_any_host: bool,
-    path_prefix: Option<String>,
-    exact_params: HashSet<String>,
-    prefix_params: Vec<String>,
-    regex_params: Vec<String>,
-    url_regex: Option<String>,
-    /// Residual regexes compiled on first `clean_url` use (not at bundle load).
-    compiled: OnceLock<CompiledMatchers>,
-}
-
-impl Clone for TrackerRule {
-    fn clone(&self) -> Self {
-        Self {
-            url_pattern: self.url_pattern.clone(),
-            exceptions: self.exceptions.clone(),
-            rules: self.rules.clone(),
-            host_suffixes: self.host_suffixes.clone(),
-            host_label: self.host_label.clone(),
-            match_any_host: self.match_any_host,
-            path_prefix: self.path_prefix.clone(),
-            exact_params: self.exact_params.clone(),
-            prefix_params: self.prefix_params.clone(),
-            regex_params: self.regex_params.clone(),
-            url_regex: self.url_regex.clone(),
-            compiled: OnceLock::new(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct CompiledMatchers {
-    url_re: Option<regex::Regex>,
-    exception_res: Vec<regex::Regex>,
-    rule_res: Vec<regex::Regex>,
-}
-
-// OnceLock is not Clone; TrackerRule clones reset the cache (recompile on next use).
-impl Clone for CompiledMatchers {
-    fn clone(&self) -> Self {
-        Self {
-            url_re: self.url_re.clone(),
-            exception_res: self.exception_res.clone(),
-            rule_res: self.rule_res.clone(),
-        }
-    }
-}
-
-/// Bundled ClearURLs tracker-parameter rules.
-#[derive(Debug, Default)]
-pub struct TrackerPatterns {
-    /// Display / disk-override rules. Empty when using `static_rules` until first Lua export.
-    pub rules: Vec<TrackerRule>,
-    static_rules: Option<&'static [CompiledTrackerRule]>,
-    /// Residual regexes for the static table, compiled on first `clean_url`.
-    static_regexes: OnceLock<StaticRegexTables>,
-}
-
-#[derive(Debug)]
-struct StaticRegexTables {
-    /// Per-rule: (url_re, exception_res, param_res)
-    per_rule: Vec<(Option<regex::Regex>, Vec<regex::Regex>, Vec<regex::Regex>)>,
-}
-
-impl Clone for TrackerPatterns {
-    fn clone(&self) -> Self {
-        Self {
-            rules: self.rules.clone(),
-            static_rules: self.static_rules,
-            static_regexes: OnceLock::new(),
-        }
-    }
-}
-
-impl TrackerPatterns {
-    fn from_static(rules: &'static [CompiledTrackerRule]) -> Self {
-        // Near-zero startup: keep only the static slice; materialize owned `rules` for Lua later.
-        Self {
-            rules: Vec::new(),
-            static_rules: Some(rules),
-            static_regexes: OnceLock::new(),
-        }
-    }
-
-    /// Number of provider rules (static or owned).
-    pub fn rule_count(&self) -> usize {
-        if let Some(rules) = self.static_rules {
-            return rules.len();
-        }
-        self.rules.len()
-    }
-
-    /// Ensure `self.rules` is populated for introspection (Lua). Cheap relative to regex compile.
-    pub fn materialize_rules_for_display(&mut self) {
-        if !self.rules.is_empty() {
-            return;
-        }
-        let Some(static_rules) = self.static_rules else {
-            return;
-        };
-        self.rules = static_rules.iter().map(tracker_rule_from_static).collect();
-    }
-
-    /// Strip tracker query args using ClearURLs rules (SearXNG `TRACKER_PATTERNS.clean_url`).
-    pub fn clean_url(&self, raw: &str) -> String {
-        let Ok(mut parsed) = url::Url::parse(raw) else {
-            return raw.to_string();
-        };
-        if parsed.query().is_none() {
-            return raw.to_string();
-        }
-        if let Some(static_rules) = self.static_rules {
-            return clean_url_static(self, static_rules, raw, parsed);
-        }
-        let mut current = raw.to_string();
-        for rule in &self.rules {
-            if parsed.query().is_none() {
-                break;
-            }
-            if !owned_rule_matches(rule, &parsed, &current) {
-                continue;
-            }
-            if owned_rule_excepted(rule, &current) {
-                continue;
-            }
-            let kept: Vec<(String, String)> = parsed
-                .query_pairs()
-                .filter(|(name, _)| !owned_param_matches(rule, name))
-                .map(|(name, value)| (name.into_owned(), value.into_owned()))
-                .collect();
-            if kept.is_empty() {
-                parsed.set_query(None);
-            } else {
-                parsed.query_pairs_mut().clear().extend_pairs(&kept);
-            }
-            current = parsed.to_string();
-        }
-        current
-    }
-}
-
-fn tracker_rule_from_static(r: &CompiledTrackerRule) -> TrackerRule {
-    let mut all: Vec<String> = r
-        .exact_params
-        .iter()
-        .chain(r.prefix_params.iter())
-        .chain(r.regex_params.iter())
-        .map(|s| (*s).to_string())
-        .collect();
-    all.sort();
-    all.dedup();
-    TrackerRule {
-        url_pattern: r.url_pattern.to_string(),
-        exceptions: r
-            .exception_regexes
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
-        rules: all,
-        host_suffixes: match &r.host {
-            HostMatch::Suffix(s) => vec![(*s).to_string()],
-            HostMatch::AnySuffix(parts) => parts.iter().map(|s| (*s).to_string()).collect(),
-            _ => Vec::new(),
-        },
-        host_label: match &r.host {
-            HostMatch::Label(s) => Some((*s).to_string()),
-            _ => None,
-        },
-        match_any_host: matches!(r.host, HostMatch::Any),
-        path_prefix: r.path_prefix.map(str::to_string),
-        exact_params: r.exact_params.iter().map(|s| (*s).to_string()).collect(),
-        prefix_params: r.prefix_params.iter().map(|s| (*s).to_string()).collect(),
-        regex_params: r.regex_params.iter().map(|s| (*s).to_string()).collect(),
-        url_regex: match &r.host {
-            HostMatch::Regex(s) => Some((*s).to_string()),
-            _ => None,
-        },
-        compiled: OnceLock::new(),
-    }
-}
-
-fn clean_url_static(
-    patterns: &TrackerPatterns,
-    rules: &'static [CompiledTrackerRule],
-    raw: &str,
-    mut parsed: url::Url,
-) -> String {
-    let mut current = raw.to_string();
-    let regexes = patterns.static_regexes.get_or_init(|| StaticRegexTables {
-        per_rule: rules
-            .iter()
-            .map(|r| {
-                let url_re = match &r.host {
-                    HostMatch::Regex(pat) => regex::Regex::new(pat).ok(),
-                    _ => None,
-                };
-                let exception_res = r
-                    .exception_regexes
-                    .iter()
-                    .filter_map(|pat| regex::Regex::new(pat).ok())
-                    .collect();
-                let param_res = r
-                    .regex_params
-                    .iter()
-                    .filter_map(|pat| regex::Regex::new(pat).ok())
-                    .collect();
-                (url_re, exception_res, param_res)
-            })
-            .collect(),
-    });
-
-    for (idx, rule) in rules.iter().enumerate() {
-        if parsed.query().is_none() {
-            break;
-        }
-        if !static_rule_matches(rule, &regexes.per_rule[idx].0, &parsed, &current) {
-            continue;
-        }
-        if regexes.per_rule[idx]
-            .1
-            .iter()
-            .any(|re| re.is_match(&current))
-        {
-            continue;
-        }
-        let kept: Vec<(String, String)> = parsed
-            .query_pairs()
-            .filter(|(name, _)| !static_param_matches(rule, &regexes.per_rule[idx].2, name))
-            .map(|(name, value)| (name.into_owned(), value.into_owned()))
-            .collect();
-        if kept.is_empty() {
-            parsed.set_query(None);
-        } else {
-            parsed.query_pairs_mut().clear().extend_pairs(&kept);
-        }
-        current = parsed.to_string();
-    }
-    current
-}
-
-fn static_rule_matches(
-    rule: &CompiledTrackerRule,
-    url_re: &Option<regex::Regex>,
-    parsed: &url::Url,
-    current: &str,
-) -> bool {
-    if let Some(prefix) = rule.path_prefix {
-        if !parsed.path().starts_with(prefix) {
-            return false;
-        }
-    }
-    match &rule.host {
-        HostMatch::Any => true,
-        HostMatch::Suffix(suffix) => parsed
-            .host_str()
-            .is_some_and(|h| host_matches_suffix(&h.to_ascii_lowercase(), suffix)),
-        HostMatch::Label(label) => parsed
-            .host_str()
-            .is_some_and(|h| host_has_label(&h.to_ascii_lowercase(), label)),
-        HostMatch::AnySuffix(parts) => parsed.host_str().is_some_and(|h| {
-            let host = h.to_ascii_lowercase();
-            parts
-                .iter()
-                .any(|suffix| host_matches_suffix(&host, suffix))
-        }),
-        HostMatch::Regex(_) => url_re.as_ref().is_some_and(|re| re.is_match(current)),
-    }
-}
-
-fn static_param_matches(
-    rule: &CompiledTrackerRule,
-    regex_params: &[regex::Regex],
-    name: &str,
-) -> bool {
-    if rule.exact_params.contains(&name) {
-        return true;
-    }
-    if rule
-        .prefix_params
-        .iter()
-        .any(|prefix| name == *prefix || name.starts_with(&format!("{prefix}_")))
-    {
-        return true;
-    }
-    regex_params.iter().any(|re| re.is_match(name))
-}
-
-fn owned_rule_matches(rule: &TrackerRule, parsed: &url::Url, current: &str) -> bool {
-    if let Some(prefix) = &rule.path_prefix {
-        if !parsed.path().starts_with(prefix.as_str()) {
-            return false;
-        }
-    }
-    if rule.match_any_host {
-        return true;
-    }
-    if let Some(host) = parsed.host_str() {
-        let host = host.to_ascii_lowercase();
-        if let Some(label) = &rule.host_label {
-            if host_has_label(&host, label) {
-                return true;
-            }
-        }
-        for suffix in &rule.host_suffixes {
-            if host_matches_suffix(&host, suffix) {
-                return true;
-            }
-        }
-    }
-    if let Some(pat) = &rule.url_regex {
-        let _ = pat;
-        return rule
-            .compiled
-            .get_or_init(|| compile_matchers(rule))
-            .url_re
-            .as_ref()
-            .is_some_and(|re| re.is_match(current));
-    }
-    false
-}
-
-fn owned_rule_excepted(rule: &TrackerRule, current: &str) -> bool {
-    if rule.exceptions.is_empty() {
-        return false;
-    }
-    rule.compiled
-        .get_or_init(|| compile_matchers(rule))
-        .exception_res
-        .iter()
-        .any(|re| re.is_match(current))
-}
-
-fn owned_param_matches(rule: &TrackerRule, name: &str) -> bool {
-    if rule.exact_params.contains(name) {
-        return true;
-    }
-    if rule
-        .prefix_params
-        .iter()
-        .any(|prefix| name == prefix.as_str() || name.starts_with(&format!("{prefix}_")))
-    {
-        return true;
-    }
-    if rule.regex_params.is_empty() {
-        return false;
-    }
-    rule.compiled
-        .get_or_init(|| compile_matchers(rule))
-        .rule_res
-        .iter()
-        .any(|re| re.is_match(name))
-}
-
-fn host_matches_suffix(host: &str, suffix: &str) -> bool {
-    host == suffix || host.ends_with(&format!(".{suffix}"))
-}
-
-fn host_has_label(host: &str, label: &str) -> bool {
-    host.split('.').any(|part| part == label)
-}
-
-fn compile_matchers(rule: &TrackerRule) -> CompiledMatchers {
-    CompiledMatchers {
-        url_re: rule
-            .url_regex
-            .as_deref()
-            .and_then(|pat| regex::Regex::new(pat).ok()),
-        exception_res: rule
-            .exceptions
-            .iter()
-            .filter_map(|pat| regex::Regex::new(pat).ok())
-            .collect(),
-        rule_res: rule
-            .regex_params
-            .iter()
-            .filter_map(|pat| regex::Regex::new(pat).ok())
-            .collect(),
     }
 }
 
@@ -1420,6 +1010,23 @@ impl AhmiaBlacklist {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn hashes_text(&self) -> String {
+        let mut out = String::with_capacity(self.len() * 33);
+        if let Some(bytes) = self.static_hashes {
+            for chunk in bytes.chunks_exact(32) {
+                if let Ok(hash) = std::str::from_utf8(chunk) {
+                    out.push_str(hash);
+                    out.push('\n');
+                }
+            }
+        }
+        for hash in &self.owned {
+            out.push_str(hash);
+            out.push('\n');
+        }
+        out
+    }
 }
 
 /// Detected language code (opaque wrapper; detector swappable).
@@ -1452,7 +1059,6 @@ pub fn detect_language(text: &str) -> Option<LangCode> {
 
 #[allow(clippy::approx_constant, clippy::type_complexity)]
 mod generated_data {
-    use super::{CompiledTrackerRule, HostMatch};
     include!(concat!(env!("OUT_DIR"), "/generated_data.rs"));
 }
 pub use generated_data::*;
@@ -1518,7 +1124,6 @@ fn load_from_source(source: &dyn DataSource) -> Result<DataBundle, DataError> {
     let engine_traits = load_engine_traits(source)?;
     let useragents = load_useragents(source)?;
     let locales = load_locales(source)?;
-    let tracker_patterns = load_tracker_patterns(source)?;
     // ponytail: prefer json list; fall back to SearXNG's line-oriented txt
     let ahmia_blacklist = match load_optional_string_list(source, "ahmia_blacklist.json")? {
         list if !list.is_empty() => {
@@ -1556,7 +1161,6 @@ fn load_from_source(source: &dyn DataSource) -> Result<DataBundle, DataError> {
         engine_traits,
         useragents,
         locales,
-        tracker_patterns,
         ahmia_blacklist,
         doi_resolvers,
         autocomplete,
@@ -1614,7 +1218,6 @@ fn load_precompiled_bundle() -> DataBundle {
             PRECOMPILED_GSA_USERAGENTS,
         ),
         locales: LocaleMap::from_static(&PRECOMPILED_LOCALE_NAMES, PRECOMPILED_RTL_LOCALES),
-        tracker_patterns: TrackerPatterns::from_static(PRECOMPILED_TRACKER_RULES),
         ahmia_blacklist: AhmiaBlacklist::from_static(PRECOMPILED_AHMIA_HASHES),
         doi_resolvers,
         autocomplete,
@@ -1633,124 +1236,6 @@ fn load_optional_string_list(
         return Ok(Vec::new());
     };
     parse_json(&contents, file)
-}
-
-#[derive(Debug, Deserialize)]
-struct TrackerRuleRaw {
-    url: String,
-    #[serde(default)]
-    exceptions: Vec<String>,
-    #[serde(default)]
-    rules: Vec<String>,
-}
-
-fn load_tracker_patterns(source: &dyn DataSource) -> Result<TrackerPatterns, DataError> {
-    const FILE: &str = "tracker_patterns.json";
-    let Some(contents) = source.read_optional(FILE)? else {
-        return Ok(TrackerPatterns::default());
-    };
-    let raw: Vec<TrackerRuleRaw> = parse_json(&contents, FILE)?;
-    Ok(tracker_patterns_from_disk(raw))
-}
-
-fn tracker_patterns_from_disk(raw: Vec<TrackerRuleRaw>) -> TrackerPatterns {
-    // Disk override: keep regex URL matching (same ClearURLs patterns) but classify
-    // param rules the same way as build.rs where possible.
-    let mut rules = Vec::new();
-    for entry in raw {
-        let mut exact = HashSet::new();
-        let mut prefixes = Vec::new();
-        let mut regex_params = Vec::new();
-        for rule in &entry.rules {
-            classify_param_runtime(rule, &mut exact, &mut prefixes, &mut regex_params);
-        }
-        if exact.is_empty() && prefixes.is_empty() && regex_params.is_empty() {
-            continue;
-        }
-        rules.push(TrackerRule {
-            url_pattern: entry.url.clone(),
-            exceptions: entry.exceptions,
-            rules: entry.rules,
-            host_suffixes: Vec::new(),
-            host_label: None,
-            match_any_host: entry.url == ".*",
-            path_prefix: None,
-            exact_params: exact,
-            prefix_params: prefixes,
-            regex_params,
-            url_regex: if entry.url == ".*" {
-                None
-            } else {
-                Some(entry.url)
-            },
-            compiled: OnceLock::new(),
-        });
-    }
-    TrackerPatterns {
-        rules,
-        static_rules: None,
-        static_regexes: OnceLock::new(),
-    }
-}
-
-fn classify_param_runtime(
-    rule: &str,
-    exact: &mut HashSet<String>,
-    prefixes: &mut Vec<String>,
-    regex_params: &mut Vec<String>,
-) {
-    let stripped = rule.strip_prefix("(?:%3F)?").unwrap_or(rule);
-    let is_literal = |s: &str| {
-        let mut chars = s.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                let _ = chars.next();
-                continue;
-            }
-            if matches!(
-                c,
-                '.' | '*' | '+' | '?' | '^' | '$' | '{' | '}' | '[' | ']' | '(' | ')' | '|'
-            ) {
-                return false;
-            }
-        }
-        true
-    };
-    let unescape = |s: &str| {
-        let mut out = String::new();
-        let mut chars = s.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                if let Some(n) = chars.next() {
-                    out.push(n);
-                }
-            } else {
-                out.push(c);
-            }
-        }
-        out
-    };
-    if is_literal(stripped) {
-        exact.insert(unescape(stripped));
-        return;
-    }
-    for suffix in [
-        "(?:_[a-z_]*)?",
-        "(?:_[a-z]*)?",
-        "_[a-z_]+",
-        "_[a-z]+",
-        "_[a-z_]*",
-        "_[a-z]*",
-        "(?:_[a-z]*)+",
-    ] {
-        if let Some(prefix) = stripped.strip_suffix(suffix) {
-            if !prefix.is_empty() && is_literal(prefix) {
-                prefixes.push(unescape(prefix));
-                return;
-            }
-        }
-    }
-    regex_params.push(rule.to_string());
 }
 
 fn load_bangs(source: &dyn DataSource) -> Result<BangTrie, DataError> {
@@ -1856,16 +1341,6 @@ mod tests {
             let ua = pool.generate().expect("non-empty pool generates");
             assert!(pool.is_member(&ua), "generated UA not a pool member: {ua}");
         }
-    }
-
-    #[test]
-    fn embedded_tracker_patterns_strip_utm() {
-        let bundle = load_embedded_bundle().expect("embedded data");
-        assert!(bundle.tracker_patterns.rule_count() > 0);
-        let cleaned = bundle
-            .tracker_patterns
-            .clean_url("https://example.com/a?utm_source=x&q=rust");
-        assert_eq!(cleaned, "https://example.com/a?q=rust");
     }
 
     #[test]

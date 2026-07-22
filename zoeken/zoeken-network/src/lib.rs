@@ -38,6 +38,8 @@ pub enum NetworkError {
         #[source]
         source: wreq::Error,
     },
+    #[error("unsupported TLS setting for '{scope}': {detail}")]
+    UnsupportedTls { scope: String, detail: String },
     #[error("network '{name}' references unknown network '{target}'")]
     UnknownReference { name: String, target: String },
     #[error("transport error on network '{name}': {source}")]
@@ -199,15 +201,15 @@ impl std::fmt::Debug for NetworkConfig {
 }
 
 impl NetworkConfig {
-    #[must_use]
-    pub fn from_outgoing(outgoing: &OutgoingSettings) -> Self {
-        Self {
+    pub fn from_outgoing(outgoing: &OutgoingSettings) -> Result<Self, NetworkError> {
+        require_tls_verify(outgoing.verify.as_ref(), "outgoing")?;
+        Ok(Self {
             timeout: duration_from_secs_f64(outgoing.request_timeout),
             retries: outgoing.retries,
             retry_on_http_error: Vec::new(),
             proxies: proxies_to_vec(outgoing.proxies.as_ref()),
             max_redirects: outgoing.max_redirects as usize,
-            verify: verify_flag(outgoing.verify.as_ref()),
+            verify: true,
             headers: HeaderMap::new(),
             local_addresses: source_ips_to_addrs(outgoing.source_ips.as_ref()),
             enable_http2: outgoing.enable_http2,
@@ -216,12 +218,16 @@ impl NetworkConfig {
             keepalive_expiry: duration_from_secs_f64(outgoing.keepalive_expiry),
             using_tor_proxy: outgoing.using_tor_proxy,
             emulation: EmulationProfile::default(),
-        }
+        })
     }
 
-    #[must_use]
-    pub fn from_network_settings(outgoing: &OutgoingSettings, network: &NetworkSettings) -> Self {
-        let mut cfg = Self::from_outgoing(outgoing);
+    pub fn from_network_settings(
+        outgoing: &OutgoingSettings,
+        network: &NetworkSettings,
+        scope: &str,
+    ) -> Result<Self, NetworkError> {
+        let mut cfg = Self::from_outgoing(outgoing)?;
+        require_tls_verify(network.verify.as_ref(), scope)?;
 
         if let Some(timeout) = network.request_timeout {
             cfg.timeout = duration_from_secs_f64(timeout);
@@ -237,9 +243,6 @@ impl NetworkConfig {
         }
         if let Some(keepalive_expiry) = network.keepalive_expiry {
             cfg.keepalive_expiry = duration_from_secs_f64(keepalive_expiry);
-        }
-        if let Some(verify) = network.verify.as_ref() {
-            cfg.verify = verify_flag(Some(verify));
         }
         if let Some(max_redirects) = network.max_redirects {
             cfg.max_redirects = max_redirects as usize;
@@ -260,7 +263,7 @@ impl NetworkConfig {
             cfg.using_tor_proxy = using_tor_proxy;
         }
 
-        cfg
+        Ok(cfg)
     }
 }
 
@@ -272,11 +275,23 @@ fn duration_from_secs_f64(secs: f64) -> Duration {
     }
 }
 
-fn verify_flag(verify: Option<&BoolOrString>) -> bool {
+fn require_tls_verify(
+    verify: Option<&BoolOrString>,
+    scope: &str,
+) -> Result<(), NetworkError> {
     match verify {
-        Some(BoolOrString::Bool(value)) => *value,
-        Some(BoolOrString::Str(_)) => true,
-        None => true,
+        None | Some(BoolOrString::Bool(true)) => Ok(()),
+        Some(BoolOrString::Bool(false)) => Err(NetworkError::UnsupportedTls {
+            scope: scope.to_string(),
+            detail: "verify: false is not supported; TLS certificate verification is always enabled"
+                .to_string(),
+        }),
+        Some(BoolOrString::Str(path)) => Err(NetworkError::UnsupportedTls {
+            scope: scope.to_string(),
+            detail: format!(
+                "custom CA path ({path}) is not supported; only verify: true is allowed"
+            ),
+        }),
     }
 }
 
@@ -823,7 +838,7 @@ impl std::fmt::Debug for NetworkManager {
 
 impl NetworkManager {
     pub fn from_settings(outgoing: &OutgoingSettings) -> Result<Self, NetworkError> {
-        let default_cfg = NetworkConfig::from_outgoing(outgoing);
+        let default_cfg = NetworkConfig::from_outgoing(outgoing)?;
         let default = Network::build(DEFAULT_NETWORK, default_cfg.clone())?;
 
         let mut networks = BTreeMap::new();
@@ -842,7 +857,8 @@ impl NetworkManager {
                 references.push((name.clone(), target.clone()));
                 continue;
             }
-            let cfg = NetworkConfig::from_network_settings(outgoing, settings);
+            let scope = format!("outgoing.networks.{name}");
+            let cfg = NetworkConfig::from_network_settings(outgoing, settings, &scope)?;
             networks.insert(name.clone(), Network::build(name, cfg)?);
         }
 
@@ -1142,7 +1158,7 @@ mod tests {
     #[test]
     fn config_from_outgoing_maps_defaults() {
         let outgoing = default_outgoing();
-        let cfg = NetworkConfig::from_outgoing(&outgoing);
+        let cfg = NetworkConfig::from_outgoing(&outgoing).expect("outgoing defaults");
         assert_eq!(cfg.timeout, Duration::from_secs_f64(3.0));
         assert_eq!(cfg.max_redirects, 30);
         assert_eq!(cfg.retries, 0);
@@ -1162,7 +1178,8 @@ mod tests {
             retry_on_http_error: Some(vec![429, 503]),
             ..Default::default()
         };
-        let cfg = NetworkConfig::from_network_settings(&outgoing, &ns);
+        let cfg = NetworkConfig::from_network_settings(&outgoing, &ns, "test")
+            .expect("named network");
         assert_eq!(cfg.retries, 3);
         assert!(!cfg.enable_http2);
         assert_eq!(cfg.retry_on_http_error, vec![429, 503]);
@@ -1185,13 +1202,30 @@ mod tests {
     }
 
     #[test]
-    fn verify_flag_treats_ca_path_as_enabled() {
-        assert!(verify_flag(None));
-        assert!(verify_flag(Some(&BoolOrString::Bool(true))));
-        assert!(!verify_flag(Some(&BoolOrString::Bool(false))));
-        assert!(verify_flag(Some(&BoolOrString::Str(
-            "/etc/ca.pem".to_string()
-        ))));
+    fn require_tls_verify_rejects_disable_and_custom_ca() {
+        assert!(require_tls_verify(None, "outgoing").is_ok());
+        assert!(require_tls_verify(Some(&BoolOrString::Bool(true)), "outgoing").is_ok());
+        assert!(matches!(
+            require_tls_verify(Some(&BoolOrString::Bool(false)), "outgoing"),
+            Err(NetworkError::UnsupportedTls { .. })
+        ));
+        assert!(matches!(
+            require_tls_verify(
+                Some(&BoolOrString::Str("/etc/ca.pem".to_string())),
+                "outgoing.networks.internal"
+            ),
+            Err(NetworkError::UnsupportedTls { .. })
+        ));
+    }
+
+    #[test]
+    fn from_settings_rejects_verify_false() {
+        let mut outgoing = default_outgoing();
+        outgoing.verify = Some(BoolOrString::Bool(false));
+        assert!(matches!(
+            NetworkManager::from_settings(&outgoing),
+            Err(NetworkError::UnsupportedTls { .. })
+        ));
     }
 
     #[test]

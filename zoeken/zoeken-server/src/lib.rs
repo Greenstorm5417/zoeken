@@ -15,10 +15,10 @@ pub mod readiness;
 pub mod serialize;
 pub mod serve;
 pub mod static_assets;
+pub mod limiter;
 mod ahmia_filter;
-mod tracker_cleanup;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +29,6 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use url::form_urlencoded;
-use zoeken_engine_core::SuspendConfig;
 use zoeken_network::{NetworkError, NetworkManager};
 use zoeken_prefs::Preferences;
 use zoeken_query::FormParams;
@@ -37,7 +36,7 @@ use zoeken_search::{
     EnabledEngineSet, EngineExecutor, EnginePreferences, MetricsRecorder, NoopRecorder, Search,
     SearchConfig, SuspensionPolicy,
 };
-use zoeken_settings::{DeploymentConfig, OutgoingSettings, Settings};
+use zoeken_settings::{DeploymentConfig, LimiterSource, OutgoingSettings, Settings};
 
 use crate::executor::NetworkExecutor;
 use crate::image_proxy::{ImageProxyFetcher, WreqImageFetcher};
@@ -104,6 +103,7 @@ pub enum LimiterLoadError {
         source: std::io::Error,
     },
     #[error("limiter.{key} must be a string")]
+    #[allow(dead_code)]
     InvalidType { key: &'static str },
 }
 
@@ -135,35 +135,27 @@ fn limiter_from_settings(
     settings: &Settings,
     data: &DataBundle,
 ) -> Result<Arc<Detector>, LimiterLoadError> {
-    let mut config = if let Some(value) = settings.limiter.get("toml") {
-        let text = value
-            .as_str()
-            .ok_or(LimiterLoadError::InvalidType { key: "toml" })?;
-        LimiterConfig::from_toml_str(text)?
-    } else if let Some(value) = settings.limiter.get("file") {
-        let path = value
-            .as_str()
-            .ok_or(LimiterLoadError::InvalidType { key: "file" })?;
-        let text = std::fs::read_to_string(path).map_err(|source| LimiterLoadError::Read {
-            path: path.to_string(),
-            source,
-        })?;
-        LimiterConfig::from_toml_str(&text)?
-    } else {
-        LimiterConfig::from_toml_str(&data.limiter_toml)?
+    let resolved = settings.resolve();
+    let mut config = match &resolved.limiter.source {
+        LimiterSource::Inline(text) => LimiterConfig::from_toml_str(text)?,
+        LimiterSource::File(path) => {
+            let text = std::fs::read_to_string(path).map_err(|source| LimiterLoadError::Read {
+                path: path.clone(),
+                source,
+            })?;
+            LimiterConfig::from_toml_str(&text)?
+        }
+        LimiterSource::Bundled => LimiterConfig::from_toml_str(&data.limiter_toml)?,
     };
 
     // Operator-facing `deployment.trusted_proxies` is always unioned into the
     // limiter list (bundled limiter.toml only trusts loopback by default).
     merge_deployment_trusted_proxies(&mut config, settings);
 
-    let link_token = settings
-        .limiter
-        .get("link_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    Ok(Arc::new(Detector::new(config, link_token)))
+    Ok(Arc::new(Detector::new(
+        config,
+        resolved.limiter.link_token.clone(),
+    )))
 }
 
 fn default_favicon_service(settings: &Settings) -> Arc<AppFaviconService> {
@@ -196,6 +188,7 @@ fn persistent_favicon_service(
 }
 
 fn search_config_from_settings(settings: &Settings) -> SearchConfig {
+    let resolved = settings.resolve();
     let default_engine_timeout = duration_from_secs_f64(settings.outgoing.request_timeout);
     let max_request_timeout = settings
         .outgoing
@@ -203,28 +196,20 @@ fn search_config_from_settings(settings: &Settings) -> SearchConfig {
         .map(duration_from_secs_f64)
         .unwrap_or(default_engine_timeout)
         .max(default_engine_timeout);
+    let health = &resolved.health;
     SearchConfig {
         default_engine_timeout,
         max_request_timeout,
-        suspension: SuspensionPolicy {
-            config: SuspendConfig::new(
-                1,
-                duration_from_secs_f64(settings.search.ban_time_on_fail),
-                duration_from_secs_f64(settings.search.max_ban_time_on_fail),
-            ),
-            access_denied: duration_from_secs_f64(settings.search.suspended_times.access_denied),
-            captcha: duration_from_secs_f64(settings.search.suspended_times.captcha),
-            too_many_requests: duration_from_secs_f64(
-                settings.search.suspended_times.too_many_requests,
-            ),
-            cf_captcha: duration_from_secs_f64(settings.search.suspended_times.cf_captcha),
-            cf_access_denied: duration_from_secs_f64(
-                settings.search.suspended_times.cf_access_denied,
-            ),
-            recaptcha_captcha: duration_from_secs_f64(
-                settings.search.suspended_times.recaptcha_captcha,
-            ),
-        },
+        suspension: SuspensionPolicy::from_durations(
+            duration_from_secs_f64(health.ban_time_on_fail),
+            duration_from_secs_f64(health.max_ban_time_on_fail),
+            duration_from_secs_f64(health.access_denied),
+            duration_from_secs_f64(health.captcha),
+            duration_from_secs_f64(health.too_many_requests),
+            duration_from_secs_f64(health.cf_captcha),
+            duration_from_secs_f64(health.cf_access_denied),
+            duration_from_secs_f64(health.recaptcha_captcha),
+        ),
     }
 }
 
@@ -240,6 +225,7 @@ fn duration_from_secs_f64(value: f64) -> Duration {
 /// a `DataBundle` clone. Feeds `/config` (`info.rs`'s `hostnames`/`doi_resolvers`)
 /// and the SPA client-features that read them.
 fn resolved_data_bundle(settings: &Settings, data: &DataBundle) -> DataBundle {
+    let resolved = settings.resolve();
     let mut data = data.clone();
     data.plugin_data.doi_resolver = settings
         .default_doi_resolver
@@ -253,64 +239,14 @@ fn resolved_data_bundle(settings: &Settings, data: &DataBundle) -> DataBundle {
         })
         .or_else(|| data.doi_resolvers.resolvers.values().next())
         .cloned();
-    data.plugin_data.hostnames = hostnames_rules_from_settings(&settings.hostnames.extra);
+    data.plugin_data.hostnames = zoeken_data::HostnamesRules {
+        replace: resolved.hostnames.replace.clone(),
+        remove: resolved.hostnames.remove.clone(),
+        high_priority: resolved.hostnames.high_priority.clone(),
+        low_priority: resolved.hostnames.low_priority.clone(),
+    };
     data.plugin_data.using_tor_proxy = settings.outgoing.using_tor_proxy;
     data
-}
-
-fn hostnames_rules_from_settings(
-    extra: &BTreeMap<String, serde_yaml_ng::Value>,
-) -> zoeken_data::HostnamesRules {
-    zoeken_data::HostnamesRules {
-        replace: hostnames_replace(extra.get("replace")),
-        remove: yaml_string_list(extra.get("remove")),
-        high_priority: yaml_string_list(extra.get("high_priority")),
-        low_priority: yaml_string_list(extra.get("low_priority")),
-    }
-}
-
-fn hostnames_replace(value: Option<&serde_yaml_ng::Value>) -> Vec<(String, String)> {
-    let Some(value) = value else {
-        return Vec::new();
-    };
-    match value {
-        serde_yaml_ng::Value::Mapping(map) => map
-            .iter()
-            .filter_map(|(key, value)| Some((yaml_string(key)?, yaml_string(value)?)))
-            .collect(),
-        serde_yaml_ng::Value::Sequence(seq) => seq
-            .iter()
-            .filter_map(|item| match item {
-                serde_yaml_ng::Value::Mapping(map) => {
-                    let pattern = map
-                        .get(serde_yaml_ng::Value::String("pattern".to_string()))
-                        .and_then(yaml_string)?;
-                    let replacement = map
-                        .get(serde_yaml_ng::Value::String("replacement".to_string()))
-                        .and_then(yaml_string)?;
-                    Some((pattern, replacement))
-                }
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn yaml_string_list(value: Option<&serde_yaml_ng::Value>) -> Vec<String> {
-    match value {
-        Some(serde_yaml_ng::Value::Sequence(seq)) => seq.iter().filter_map(yaml_string).collect(),
-        Some(value) => yaml_string(value).into_iter().collect(),
-        None => Vec::new(),
-    }
-}
-
-fn yaml_string(value: &serde_yaml_ng::Value) -> Option<String> {
-    match value {
-        serde_yaml_ng::Value::String(value) => Some(value.clone()),
-        serde_yaml_ng::Value::Number(value) => Some(value.to_string()),
-        _ => None,
-    }
 }
 
 
@@ -371,6 +307,7 @@ impl AppState {
             .iter()
             .filter_map(|e| e.network.as_ref().map(|net| (e.name.clone(), net.clone())))
             .collect();
+        let search_config = search_config_from_settings(&settings);
         let executor: Arc<dyn EngineExecutor> = Arc::new(
             NetworkExecutor::new(Arc::clone(&networks))
                 .with_engine_networks(engine_networks)
@@ -379,11 +316,11 @@ impl AppState {
                     Duration::from_secs(settings.cache.search.ttl_seconds),
                     Duration::from_secs(settings.cache.search.structured_ttl_seconds),
                     settings.cache.search.max_bytes,
-                ),
+                )
+                .with_health_policy(search_config.suspension),
         );
 
         let registry = zoeken_engines::registry_from_settings(&settings);
-        let search_config = search_config_from_settings(&settings);
         let search = Search::new(registry, executor, search_config);
 
         let autocomplete = zoeken_autocomplete::service_for(
@@ -560,7 +497,7 @@ pub fn app(state: AppState) -> Router {
         .fallback(frontend::client_css_or_static)
         .with_state(Arc::new(state));
 
-    let limiter = limiter_enabled.then(|| zoeken_botdetect::layer(bot_detector));
+    let limiter = limiter_enabled.then(|| limiter::layer(bot_detector));
     crate::middleware::apply_middleware(
         router,
         &deployment,
@@ -653,13 +590,10 @@ async fn run_search(state: &AppState, headers: &HeaderMap, params: FormParams) -
         .await;
     if resolved_prefs
         .plugins
-        .get("tracker_url_remover")
+        .get("ahmia_filter")
         .copied()
         .unwrap_or(true)
     {
-        tracker_cleanup::strip_trackers(&mut container, &state.data.tracker_patterns);
-    }
-    if resolved_prefs.plugins.get("ahmia_filter").copied().unwrap_or(true) {
         ahmia_filter::filter_blacklisted_onions(
             &mut container,
             &state.data.ahmia_blacklist,

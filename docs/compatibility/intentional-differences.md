@@ -2,31 +2,55 @@
 
 Deliberate compatibility gaps between Zoeken and SearXNG.
 
-## Per-request TLS certificate verification
+## TLS certificate verification
 
-- **Behavior**: `RequestParams.verify` (`TlsVerify::Default | Disabled | CaFile`) is
-  accepted on the engine request, but TLS verification is configured only at the
-  network-client level (`build_client` → `.cert_verification(config.verify)` in
-  `zoeken-network/src/lib.rs`). The per-request `NetworkRequest.verify` flag is
-  stored but not consumed at send time.
-  - `TlsVerify::Disabled` does **not** disable verification — the request fails with a
-    TLS error instead of connecting insecurely.
-  - `TlsVerify::CaFile(path)` maps to `verify(true)` but the custom CA is **not**
-    loaded into the trust store, so hosts using a private CA fail against the system
-    roots.
-- **Why**: `wreq` exposes certificate verification at client-build granularity, not
-  per request.
-- **Security posture**: Fails **closed**. Verification is always on by default and the
-  ignored flag cannot silently disable it.
-- **Impact**: Only affects engines configured against a host with a
-  self-signed/expired cert (`verify: false`) or a private/internal CA.
-- **Revisit when**: an engine must target an internal instance needing a custom CA or
-  disabled verification.
+- **Behavior**: TLS verification is always enabled for outbound engine traffic.
+  `outgoing.verify` / named-network `verify` may only be `true` (or omitted).
+  `verify: false` and custom CA path strings are rejected at network build with a
+  clear error. There is no per-request verify flag on the engine request model.
+- **Why**: Custom trust stores and per-request disable are not implemented;
+  silent ignore would be unsafe.
+- **Security posture**: Fails **closed** — verification cannot be turned off.
+- **Impact**: Engines that need a self-signed host or private CA cannot be
+  configured; use a terminating proxy with a public CA if required.
+- **Revisit when**: an engine must target an internal instance needing a custom CA.
+
+## No Lua / server plugins
+
+- **Behavior**: Lua plugins and the generic server plugin pipeline are removed.
+  Most former plugin UX lives in the SPA
+  ([`docs/client-features.md`](../client-features.md)). External JSON/CSV/RSS
+  clients get raw aggregation for SPA-owned transforms (hostnames, DOI rewrite,
+  tracker stripping). **Exception:** `ahmia_filter` still runs on the server
+  when `outgoing.using_tor_proxy` is true and the preference is enabled, so
+  blacklisted onion URLs never leave the instance. No other former plugin was
+  judged “must be server” (tracker strip stays SPA display cleanup).
+- **Impact**: Custom `.lua` plugins are unsupported. Preference ids still appear
+  on `/config` (SPA gating for client features; server gating for ahmia).
+
+## Engine health (storage circuit only)
+
+- **Behavior**: Engine cooldowns are owned by the durable storage circuit.
+  `search.suspended_times` / `ban_time_on_fail` map onto circuit policy
+  (`SuspensionPolicy`); there is no second in-process suspend gate.
+  DuckDuckGo captcha opens **no** circuit (SearXNG-compatible: no IP ban).
+- **Impact**: Operators tuning `suspended_times` change circuit cooldowns, not a
+  separate process-local suspend table. Multi-replica instances share health via
+  storage.
+- **Revisit when**: half-open probe policy needs richer knobs than durations.
+
+## Engine list merge policy
+
+- **Behavior**: Empty `engines:` → built-in catalog. Non-empty +
+  `search.engine_list_mode: replace` (default) → listed engines only.
+  `engine_list_mode: merge` overlays listed entries onto the built-in catalog.
+- **Impact**: Historical Zoeken configs keep replace semantics; merge is opt-in.
+- **Revisit when**: merge becomes the safer default for partial overlays.
 
 ## Command engines
 
 - **Behavior**: SearXNG's `engine: command` type is **not supported**. It is
-  deliberately absent from the safe `Processor` enum.
+  deliberately absent from the safe `Processor` enum (`online` / `offline` only).
 - **Why**: Command engines spawn OS processes with user-influenced input.
 - **Security posture**: Hardening choice — no configuration causes zoeken to shell out.
 - **Impact**: `settings.yml` entries using `engine: command` are unsupported.
@@ -34,9 +58,10 @@ Deliberate compatibility gaps between Zoeken and SearXNG.
 
 ## OnlineCurrency / OnlineDictionary / OnlineUrlSearch processors
 
-- **Behavior**: The `Processor` enum includes these variants, but no specialized
-  selection/scoring path exists yet. Engines that need them (e.g. `currency_convert`)
-  are intentionally skipped.
+- **Behavior**: These SearXNG processor specializations are **not** in Zoeken's
+  `Processor` enum. Instant answers that need HTTP are normal online engines
+  (`currency`, `dictionary`, …). Engines that required the old specializations
+  (e.g. SearXNG `currency_convert`) stay intentionally skipped.
 - **Revisit when**: porting an engine that cannot be expressed as a normal online engine.
 
 ## Remaining bespoke engines
@@ -54,15 +79,16 @@ Deliberate compatibility gaps between Zoeken and SearXNG.
 
 ## Tracker patterns refresh
 
-- **Behavior**: `tracker_patterns.json` is a bundled ClearURLs provider snapshot
-  (regenerate with `tools/fetch_tracker_patterns.py`). Runtime does not fetch ClearURLs
-  on boot.
+- **Behavior**: `tracker_patterns.json` is a ClearURLs provider snapshot used by the
+  SPA `tracker_url_remover` client feature (copied into
+  `zoeken-client/src/lib/generated/` via `bun run sync-data`). It is **not**
+  embedded in the server binary. Runtime does not fetch ClearURLs on boot.
 - **Refresh**:
   ```sh
   uv run --no-project --python 3.13 tools/fetch_tracker_patterns.py
+  cd zoeken-client && bun run sync-data
   ```
-  Writes `zoeken/zoeken-data/data/tracker_patterns.json`. Rebuild so the binary
-  picks up the new snapshot (`zoeken-data` embed).
+  Writes `zoeken/zoeken-data/data/tracker_patterns.json`, then syncs the SPA copy.
 - **Revisit when**: operators want live rule updates without rebuild.
 
 ## Frontend / static routes
@@ -90,8 +116,8 @@ Deliberate compatibility gaps between Zoeken and SearXNG.
 ## DOI resolver preference
 
 - **Behavior**: `/config` exposes `doi_resolvers` / `default_doi_resolver`. The
-  resolver URL is applied instance-wide via plugin data at boot. There is no
-  per-user DOI preference cookie field (unlike SearXNG).
+  SPA applies the instance default resolver when `oa_doi_rewrite` is enabled.
+  There is no per-user DOI preference cookie field (unlike SearXNG).
 - **Revisit when**: `oa_doi_rewrite` needs per-request resolver overrides.
 
 ## UI theme (SPA)

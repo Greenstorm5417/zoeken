@@ -4,12 +4,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use zoeken_engine_core::{EngineError, EngineResults, ErrorCategory};
+use zoeken_search::SuspensionPolicy;
 use zoeken_storage::{EngineHealthSnapshot, EngineHealthUpdate, Storage};
 
 pub(crate) struct PendingHealth {
     storage: Option<Arc<dyn Storage>>,
     engine: String,
     previous: Option<EngineHealthSnapshot>,
+    policy: SuspensionPolicy,
     started: Instant,
     complete: bool,
 }
@@ -19,11 +21,13 @@ impl PendingHealth {
         storage: Option<Arc<dyn Storage>>,
         engine: String,
         previous: Option<EngineHealthSnapshot>,
+        policy: SuspensionPolicy,
     ) -> Self {
         Self {
             storage,
             engine,
             previous,
+            policy,
             started: Instant::now(),
             complete: false,
         }
@@ -44,6 +48,7 @@ impl Drop for PendingHealth {
         };
         let engine = self.engine.clone();
         let previous = self.previous.clone();
+        let policy = self.policy;
         let duration = self.started.elapsed();
         tokio::spawn(async move {
             record_health(
@@ -52,6 +57,7 @@ impl Drop for PendingHealth {
                 duration,
                 &Err(EngineError::Timeout),
                 previous.as_ref(),
+                &policy,
             )
             .await;
         });
@@ -75,35 +81,55 @@ pub(crate) fn circuit_is_open(snapshot: Option<&EngineHealthSnapshot>) -> bool {
     })
 }
 
+fn crosses_threshold(previous_count: u64, threshold: u32) -> bool {
+    threshold != 0 && previous_count.saturating_add(1) >= u64::from(threshold)
+}
+
 pub(crate) fn cooldown_for(
     engine: &str,
     error: &EngineError,
     previous: Option<&EngineHealthSnapshot>,
+    policy: &SuspensionPolicy,
 ) -> Option<Duration> {
     let category = ErrorCategory::from(error).as_str();
-    let base = match error {
-        EngineError::Captcha(_) if engine == "duckduckgo" => {
-            let jitter = (unix_ms().unsigned_abs() % 601) + 300;
-            Duration::from_secs(jitter)
+    let base = if let Some(explicit) = policy.explicit_duration(engine, error) {
+        if explicit.is_zero() {
+            return None;
         }
-        EngineError::Captcha(_)
-        | EngineError::CloudflareCaptcha(_)
-        | EngineError::RecaptchaCaptcha(_)
-        | EngineError::AccessDenied(_)
-        | EngineError::CloudflareAccessDenied(_) => Duration::from_secs(15 * 60),
-        EngineError::TooManyRequests(_) => Duration::from_secs(5 * 60),
-        EngineError::Parse(_) if previous.is_some_and(|health| health.errors >= 2) => {
-            Duration::from_secs(60)
+        explicit
+    } else {
+        match error {
+            EngineError::Parse(_)
+                if crosses_threshold(
+                    previous.map_or(0, |health| health.errors),
+                    policy.config.threshold,
+                ) =>
+            {
+                policy.config.base
+            }
+            EngineError::Timeout
+                if crosses_threshold(
+                    previous.map_or(0, |health| health.timeouts),
+                    policy.config.threshold,
+                ) =>
+            {
+                policy.config.base
+            }
+            EngineError::Unexpected(_)
+                if crosses_threshold(
+                    previous.map_or(0, |health| health.errors),
+                    policy.config.threshold,
+                ) =>
+            {
+                policy.config.base
+            }
+            EngineError::QueueExpired => return None,
+            _ => return None,
         }
-        EngineError::Timeout if previous.is_some_and(|health| health.timeouts >= 2) => {
-            Duration::from_secs(60)
-        }
-        EngineError::Unexpected(_) if previous.is_some_and(|health| health.errors >= 2) => {
-            Duration::from_secs(30)
-        }
-        EngineError::QueueExpired => return None,
-        _ => return None,
     };
+    if base.is_zero() {
+        return None;
+    }
     let recurrent = previous.is_some_and(|health| {
         health.last_error_category.as_deref() == Some(category)
             && matches!(health.circuit_status.as_str(), "open" | "half_open")
@@ -122,6 +148,7 @@ pub(crate) async fn record_health(
     duration: Duration,
     result: &Result<EngineResults, EngineError>,
     previous: Option<&EngineHealthSnapshot>,
+    policy: &SuspensionPolicy,
 ) {
     let Some(storage) = storage else {
         return;
@@ -137,7 +164,7 @@ pub(crate) async fn record_health(
             (true, false, None, status, None)
         }
         Err(error) => {
-            let cooldown = cooldown_for(engine, error, previous);
+            let cooldown = cooldown_for(engine, error, previous, policy);
             (
                 false,
                 matches!(error, EngineError::Timeout),

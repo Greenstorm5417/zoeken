@@ -2,13 +2,11 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use proptest::prelude::*;
 
 use zoeken_engine_core::{
-    Engine, EngineError, EngineMeta, EngineResponse, EngineResults, ErrorCategory, RequestParams,
-    SearchQueryView, SuspendConfig,
+    Engine, EngineError, EngineMeta, EngineResponse, EngineResults, RequestParams, SearchQueryView,
 };
 use zoeken_query::SearchQuery;
 use zoeken_search::{EnabledEngineSet, EngineRegistry, RegisteredEngine, SelectedEngine};
@@ -44,7 +42,6 @@ struct EngineSpec {
     name: String,
     categories: Vec<String>,
     disabled: bool,
-    suspended: bool,
     required_tokens: Vec<String>,
 }
 
@@ -72,18 +69,14 @@ fn engine_spec_strategy() -> impl Strategy<Value = EngineSpec> {
         name_strategy(),
         categories_strategy(),
         any::<bool>(),
-        any::<bool>(),
         tokens_strategy(),
     )
-        .prop_map(
-            |(name, categories, disabled, suspended, required_tokens)| EngineSpec {
-                name,
-                categories,
-                disabled,
-                suspended,
-                required_tokens,
-            },
-        )
+        .prop_map(|(name, categories, disabled, required_tokens)| EngineSpec {
+            name,
+            categories,
+            disabled,
+            required_tokens,
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -128,7 +121,7 @@ fn reference_selection(
         .filter(|s| {
             // An explicit `engines=` selection may summon a disabled engine.
             let explicitly_requested = !query_engines.is_empty() && query_engines.contains(&s.name);
-            if (s.disabled && !explicitly_requested) || s.suspended {
+            if s.disabled && !explicitly_requested {
                 return false;
             }
             if !s
@@ -157,9 +150,6 @@ proptest! {
 
     #[test]
     fn prop_engine_selection_set_algebra(scenario in scenario_strategy()) {
-        let now = Instant::now();
-        let hour = Duration::from_secs(3600);
-
         let mut registered = Vec::with_capacity(scenario.universe.len());
         for spec in &scenario.universe {
             let mut re = RegisteredEngine::new(StubEngine::arc(&spec.name, &spec.categories));
@@ -168,15 +158,6 @@ proptest! {
             }
             if !spec.required_tokens.is_empty() {
                 re = re.with_tokens(spec.required_tokens.clone());
-            }
-            if spec.suspended {
-                re.state.lock().unwrap().on_error(
-                    now,
-                    &SuspendConfig::new(1, hour, hour),
-                    "suspended",
-                    ErrorCategory::Unexpected,
-                    Some(hour),
-                );
             }
             registered.push(re);
         }
@@ -191,7 +172,7 @@ proptest! {
         let enabled_set: HashSet<String> = scenario.enabled_prefs.iter().cloned().collect();
         let tokens: HashSet<String> = scenario.available_tokens.iter().cloned().collect();
 
-        let actual = selected_names(&registry.select(&query, &prefs, &tokens, now));
+        let actual = selected_names(&registry.select(&query, &prefs, &tokens));
         let expected = reference_selection(
             &scenario.universe,
             &scenario.query_categories,

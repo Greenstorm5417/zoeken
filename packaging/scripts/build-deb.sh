@@ -60,7 +60,6 @@ mkdir -p \
   "${STAGE}/DEBIAN" \
   "${STAGE}/usr/bin" \
   "${STAGE}/usr/share/zoeken/assets" \
-  "${STAGE}/usr/share/zoeken/plugins" \
   "${STAGE}/usr/share/doc/zoeken" \
   "${STAGE}/etc/zoeken" \
   "${STAGE}/etc/default" \
@@ -69,9 +68,6 @@ mkdir -p \
 
 install -m 0755 "${BINARY}" "${STAGE}/usr/bin/zoeken-server"
 cp -a "${ASSETS}/." "${STAGE}/usr/share/zoeken/assets/"
-if [[ -d "${ROOT}/zoeken/zoeken-plugins/plugins" ]]; then
-  cp -a "${ROOT}/zoeken/zoeken-plugins/plugins/." "${STAGE}/usr/share/zoeken/plugins/"
-fi
 
 install -m 0644 "${PKG_DIR}/zoeken.service" "${STAGE}/lib/systemd/system/zoeken.service"
 install -m 0644 "${PKG_DIR}/zoeken.default" "${STAGE}/etc/default/zoeken"

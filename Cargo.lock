@@ -4150,15 +4150,12 @@ dependencies = [
 name = "zoeken-botdetect"
 version = "1.2.1"
 dependencies = [
- "axum",
  "ipnet",
  "moka",
  "proptest",
  "serde",
  "thiserror",
- "tokio",
  "toml",
- "tower",
  "tracing",
 ]
 
@@ -4170,12 +4167,10 @@ dependencies = [
  "phf_codegen 0.14.0",
  "proptest",
  "rand 0.9.4",
- "regex",
  "serde",
  "serde_json",
  "thiserror",
  "tracing",
- "url",
  "whatlang",
 ]
 

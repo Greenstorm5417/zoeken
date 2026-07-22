@@ -1,11 +1,18 @@
 //! zoeken-settings: layered YAML settings loading and validation.
 
+mod resolve;
+
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value;
+
+pub use resolve::{
+    ClientFeatureDefaults, EngineListMode, HealthDurations, HostnameRules, LimiterSource,
+    ResolvedEngine, ResolvedLimiter, ResolvedSettings, resolve_settings,
+};
 
 pub type ExtraMap = BTreeMap<String, Value>;
 
@@ -49,10 +56,10 @@ pub struct Settings {
     pub outgoing: OutgoingSettings,
     pub storage: StorageSettings,
     pub cache: CacheSettings,
-    /// Replaces, not merges, the default engine set when non-empty.
+    /// Engine catalog entries. Interaction with built-ins is controlled by
+    /// [`SearchSettings::engine_list_mode`] (default: replace when non-empty).
     pub engines: Vec<EngineSettings>,
     pub plugins: PluginSettings,
-    pub lua_plugins: LuaPluginSettings,
     #[serde(rename = "categories_as_tabs")]
     pub categories: CategorySettings,
     pub preferences: PreferencesSettings,
@@ -105,12 +112,8 @@ impl Default for GeneralSettings {
 pub struct BrandSettings {
     pub issue_url: String,
     pub docs_url: String,
-    pub public_instances: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wiki_url: Option<BoolOrString>,
     pub custom: BrandCustom,
     pub pwa_colors: ThemeColors,
-    pub new_issue_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -155,6 +158,9 @@ pub struct SearchSettings {
     pub ban_time_on_fail: f64,
     pub max_ban_time_on_fail: f64,
     pub suspended_times: SuspendedTimes,
+    /// How non-empty `engines:` interacts with the built-in catalog.
+    /// Default [`EngineListMode::Replace`] preserves historical behavior.
+    pub engine_list_mode: EngineListMode,
     pub formats: Vec<String>,
     pub max_page: u32,
 }
@@ -171,6 +177,7 @@ impl Default for SearchSettings {
             ban_time_on_fail: 5.0,
             max_ban_time_on_fail: 120.0,
             suspended_times: SuspendedTimes::default(),
+            engine_list_mode: EngineListMode::Replace,
             formats: vec![
                 "html".to_string(),
                 "csv".to_string(),
@@ -227,6 +234,8 @@ pub struct ServerSettings {
     pub http_protocol_version: String,
     pub method: String,
     pub default_http_headers: BTreeMap<String, String>,
+    /// Skip SPA `index.html` boot check (JSON-only / API deploys). Overridden by `APP_DISABLE_UI`.
+    pub disable_ui: bool,
 }
 
 impl Default for ServerSettings {
@@ -242,6 +251,7 @@ impl Default for ServerSettings {
             http_protocol_version: "1.0".to_string(),
             method: "POST".to_string(),
             default_http_headers: BTreeMap::new(),
+            disable_ui: false,
         }
     }
 }
@@ -431,7 +441,6 @@ pub struct UiSettings {
     pub default_theme: String,
     pub default_locale: String,
     pub theme_args: ThemeArgs,
-    pub center_alignment: bool,
     pub results_on_new_tab: bool,
     pub query_in_title: bool,
     pub cache_url: String,
@@ -446,7 +455,6 @@ impl Default for UiSettings {
             default_theme: "simple".to_string(),
             default_locale: String::new(),
             theme_args: ThemeArgs::default(),
-            center_alignment: false,
             results_on_new_tab: false,
             query_in_title: false,
             cache_url: String::new(),
@@ -733,24 +741,6 @@ pub struct PluginEntry {
     pub active: Option<bool>,
     #[serde(flatten)]
     pub extra: ExtraMap,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LuaPluginSettings {
-    pub enabled: bool,
-    pub directory: Option<String>,
-    pub order: Vec<String>,
-}
-
-impl Default for LuaPluginSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            directory: None,
-            order: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1140,6 +1130,7 @@ fn apply_env_overrides(merged: &mut Value, env: &EnvMap) -> Result<(), SettingsE
         ("APP_BASE_URL", &["server", "base_url"], Kind::String),
         ("APP_IMAGE_PROXY", &["server", "image_proxy"], Kind::Bool),
         ("APP_METHOD", &["server", "method"], Kind::String),
+        ("APP_DISABLE_UI", &["server", "disable_ui"], Kind::Bool),
         ("APP_STORAGE_BACKEND", &["storage", "backend"], Kind::String),
         (
             "APP_SQLITE_PATH",
@@ -1502,9 +1493,6 @@ search:
         assert_eq!(s.general.contact_url, None);
         assert_eq!(s.brand.issue_url, "");
         assert_eq!(s.brand.docs_url, "");
-        assert_eq!(s.brand.public_instances, "");
-        assert_eq!(s.brand.wiki_url, None);
-        assert_eq!(s.brand.new_issue_url, "");
         assert_eq!(s.brand.pwa_colors.theme_color_light, "#246018");
         assert_eq!(s.brand.pwa_colors.background_color_light, "#f2f5ee");
         assert_eq!(s.brand.pwa_colors.background_color_black, "#000");
@@ -2021,6 +2009,15 @@ recaptcha_SearxEngineCaptcha: 66
 
         assert_eq!(settings.deployment.log_level, "debug");
         assert!(!settings.deployment.metrics_enabled);
+    }
+
+    #[test]
+    fn disable_ui_env_overrides_file_and_defaults() {
+        let path = write_temp_yaml("server:\n  disable_ui: false\n");
+        let env = EnvMap::new().with("APP_DISABLE_UI", "1");
+        let settings = load_settings(Some(&path), &env).expect("load with APP_DISABLE_UI");
+        std::fs::remove_file(&path).ok();
+        assert!(settings.server.disable_ui);
     }
 
     #[test]

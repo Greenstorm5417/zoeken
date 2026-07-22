@@ -21,7 +21,8 @@
   "scripts": {
     "dev": "vite dev --port 3000",
 		"generate-routes": "tsr generate",
-		"build": "vite build",
+		"sync-data": "bun scripts/sync-client-data.mjs",
+		"build": "bun run sync-data && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "format": "biome format",

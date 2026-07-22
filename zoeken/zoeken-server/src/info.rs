@@ -58,6 +58,7 @@ struct ConfigResponse {
     hostnames: HostnamesInfo,
     /// Requester's IP as seen by the instance (client feature: self_info).
     client_ip: Option<String>,
+    using_tor_proxy: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,7 +89,6 @@ struct BangInfo {
 
 #[derive(Debug, Serialize)]
 struct UiInfo {
-    center_alignment: bool,
     results_on_new_tab: bool,
     query_in_title: bool,
     cache_url: String,
@@ -240,7 +240,6 @@ pub async fn config(
             .unwrap_or_else(|| state.data.doi_resolvers.default.clone()),
         categories_as_tabs: state.settings.categories.0.keys().cloned().collect(),
         ui: UiInfo {
-            center_alignment: state.settings.ui.center_alignment,
             results_on_new_tab: state.settings.ui.results_on_new_tab,
             query_in_title: state.settings.ui.query_in_title,
             cache_url: state.settings.ui.cache_url.clone(),
@@ -250,6 +249,7 @@ pub async fn config(
         },
         public_instance: state.settings.server.public_instance,
         hostnames: hostnames_info(&state.data.plugin_data.hostnames),
+        using_tor_proxy: state.settings.outgoing.using_tor_proxy,
     };
     let mut response = json(&response);
     // Instance config changes only on redeploy; let the browser reuse it
@@ -720,10 +720,9 @@ fn plugin_infos() -> Vec<PluginInfo> {
     client_feature_plugin_infos().collect()
 }
 
-/// Every plugin id `/preferences` and the SPA client-features gate on. All
-/// former Lua plugins are now SPA client-features or built-in Rust filters;
-/// these entries just keep `/config` listing the same ids with the same
-/// default-enabled state so gating keeps working.
+/// Every plugin id `/preferences` and the SPA client-features gate on.
+/// Former plugins are SPA client-features except server-side `ahmia_filter`;
+/// these entries keep `/config` listing the same ids/defaults for gating.
 fn client_feature_plugin_infos() -> impl Iterator<Item = PluginInfo> {
     fn info(
         id: &str,
@@ -1054,13 +1053,8 @@ hostnames:
         assert_eq!(empty.as_array().map(|a| a.len()).unwrap_or(1), 0);
     }
 
-    // Calculator and unit conversion have exactly one implementation each
-    // (Lua, `default_enabled = true`) — no more native/Lua pair, so no
-    // server-side filtering of `/config`'s plugin list is needed here.
-    // Coverage for the plugins themselves (default-on, correct answers,
-    // "how many X in Y" phrasing) lives in `zoeken-plugins/src/lua.rs`;
-    // `AppState::new()` in this test module uses `Settings::default()`,
-    // which doesn't load real plugins from disk, so it can't exercise them.
+    // Calculator and unit conversion run in the SPA client-features pipeline.
+    // `/config` still lists preference ids for gating; see docs/client-features.md.
 
     #[tokio::test]
     async fn healthz_reports_ok() {

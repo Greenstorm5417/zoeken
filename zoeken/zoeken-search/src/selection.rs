@@ -1,13 +1,11 @@
 //! Engine selection: compute which engines to query.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
-use zoeken_engine_core::{Engine, EngineError, EngineState, ErrorCategory, SuspendConfig};
+use zoeken_engine_core::{Engine, EngineError, SuspendConfig};
 use zoeken_query::SearchQuery;
-
-use crate::execution::{EngineRunStatus, ExecutionReport, UnresponsiveReason};
 
 /// Check if an engine is enabled in user preferences.
 pub trait EnginePreferences {
@@ -51,7 +49,6 @@ pub struct RegisteredEngine {
     pub weight: Option<f64>,
     pub categories: Option<Vec<String>>,
     pub shortcuts: Vec<String>,
-    pub state: Arc<Mutex<EngineState>>,
 }
 
 impl RegisteredEngine {
@@ -64,7 +61,6 @@ impl RegisteredEngine {
             weight: None,
             categories: None,
             shortcuts: Vec::new(),
-            state: Arc::new(Mutex::new(EngineState::new())),
         }
     }
 
@@ -151,100 +147,16 @@ impl EngineRegistry {
         query: &SearchQuery,
         prefs: &P,
         available_tokens: &HashSet<String>,
-        now: Instant,
     ) -> Vec<SelectedEngine> {
         self.engines
             .iter()
-            .filter(|re| self.is_selected(re, query, prefs, available_tokens, now))
+            .filter(|re| self.is_eligible(re, query, prefs, available_tokens))
             .map(|re| SelectedEngine {
                 name: re.name().to_string(),
                 engine: re.engine.clone(),
                 timeout: re.timeout,
             })
             .collect()
-    }
-
-    /// Engines that match the query but are currently suspended (e.g. Bing
-    /// after a CAPTCHA). Callers surface these in `unresponsive_engines` so
-    /// they don't vanish silently for the suspend window.
-    pub fn suspended_for_query<P: EnginePreferences + ?Sized>(
-        &self,
-        query: &SearchQuery,
-        prefs: &P,
-        available_tokens: &HashSet<String>,
-        now: Instant,
-    ) -> Vec<(String, ErrorCategory, String)> {
-        self.engines
-            .iter()
-            .filter_map(|re| {
-                if !self.is_eligible(re, query, prefs, available_tokens) {
-                    return None;
-                }
-                let Ok(state) = re.state.lock() else {
-                    return None;
-                };
-                if !state.is_suspended(now) {
-                    return None;
-                }
-                let reason = state
-                    .suspend_reason
-                    .clone()
-                    .unwrap_or_else(|| "suspended".to_string());
-                let category = state.suspend_category.unwrap_or(ErrorCategory::Unexpected);
-                Some((re.name().to_string(), category, reason))
-            })
-            .collect()
-    }
-
-    pub fn record_outcomes(
-        &self,
-        report: &ExecutionReport,
-        policy: &SuspensionPolicy,
-        now: Instant,
-    ) {
-        for outcome in &report.outcomes {
-            let Some(re) = self.engines.iter().find(|e| e.name() == outcome.engine) else {
-                continue;
-            };
-            let Ok(mut state) = re.state.lock() else {
-                continue;
-            };
-            match &outcome.status {
-                EngineRunStatus::Completed(_) => state.on_success(),
-                EngineRunStatus::Failed(error) => {
-                    let explicit = policy.explicit_duration(error);
-                    state.on_error(
-                        now,
-                        &policy.config,
-                        &error.to_string(),
-                        ErrorCategory::from(error),
-                        explicit,
-                    );
-                }
-                EngineRunStatus::Unresponsive(UnresponsiveReason::EngineTimeout) => {
-                    state.on_error(
-                        now,
-                        &policy.config,
-                        &EngineError::Timeout.to_string(),
-                        ErrorCategory::Timeout,
-                        None,
-                    );
-                }
-                EngineRunStatus::Unresponsive(UnresponsiveReason::GlobalDeadline) => {}
-            }
-        }
-    }
-
-    fn is_selected<P: EnginePreferences + ?Sized>(
-        &self,
-        re: &RegisteredEngine,
-        query: &SearchQuery,
-        prefs: &P,
-        available_tokens: &HashSet<String>,
-        now: Instant,
-    ) -> bool {
-        self.is_eligible(re, query, prefs, available_tokens)
-            && !re.state.lock().is_ok_and(|state| state.is_suspended(now))
     }
 
     fn is_eligible<P: EnginePreferences + ?Sized>(
@@ -288,6 +200,8 @@ impl EngineRegistry {
     }
 }
 
+/// Cooldown durations from `search.suspended_times` / ban settings.
+/// Shared by the storage circuit (`zoeken-server` `cooldown_for`).
 #[derive(Debug, Clone, Copy)]
 pub struct SuspensionPolicy {
     pub config: SuspendConfig,
@@ -314,23 +228,42 @@ impl Default for SuspensionPolicy {
 }
 
 impl SuspensionPolicy {
-    fn explicit_duration(&self, error: &EngineError) -> Option<Duration> {
+    /// Explicit cooldown for known error kinds. Keyed by **engine name** so
+    /// network-mapped captchas (payload ≠ engine id) still hit the DDG rule.
+    /// `Duration::ZERO` means do not open a circuit (DDG captcha: no IP ban).
+    pub fn explicit_duration(&self, engine: &str, error: &EngineError) -> Option<Duration> {
         match error {
             EngineError::AccessDenied(_) => Some(self.access_denied),
             EngineError::CloudflareAccessDenied(_) => Some(self.cf_access_denied),
-            // DuckDuckGo's html endpoint has no client session: its CAPTCHA is a
-            // per-request heuristic, not a durable IP ban, and upstream SearXNG
-            // deliberately suspends it for 0s on this error (their comment: "set
-            // suspend time to zero is OK --> ddg does not block the IP"). The
-            // generic 24h captcha suspend below is right for engines with real
-            // IP bans, but for DDG it would otherwise hide the engine for a full
-            // day after a single transient challenge.
-            EngineError::Captcha(name) if name == "duckduckgo" => Some(Duration::ZERO),
+            EngineError::Captcha(_) if engine == "duckduckgo" => Some(Duration::ZERO),
             EngineError::Captcha(_) => Some(self.captcha),
             EngineError::CloudflareCaptcha(_) => Some(self.cf_captcha),
             EngineError::RecaptchaCaptcha(_) => Some(self.recaptcha_captcha),
             EngineError::TooManyRequests(_) => Some(self.too_many_requests),
             _ => None,
+        }
+    }
+
+    /// Build circuit cooldown policy from resolved health durations.
+    #[must_use]
+    pub fn from_durations(
+        ban_time_on_fail: Duration,
+        max_ban_time_on_fail: Duration,
+        access_denied: Duration,
+        captcha: Duration,
+        too_many_requests: Duration,
+        cf_captcha: Duration,
+        cf_access_denied: Duration,
+        recaptcha_captcha: Duration,
+    ) -> Self {
+        Self {
+            config: SuspendConfig::new(1, ban_time_on_fail, max_ban_time_on_fail),
+            access_denied,
+            captcha,
+            too_many_requests,
+            cf_captcha,
+            cf_access_denied,
+            recaptcha_captcha,
         }
     }
 }
@@ -419,7 +352,7 @@ mod tests {
     fn selects_by_category() {
         let reg = registry();
         let q = query_with(&["general"], &[]);
-        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), Instant::now());
+        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new());
         assert_eq!(names(&selected), vec!["alpha", "gamma"]);
     }
 
@@ -427,16 +360,15 @@ mod tests {
     fn bang_intersects_with_category() {
         let reg = registry();
         let q = query_with(&["general"], &["alpha", "beta"]);
-        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), Instant::now());
+        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new());
         assert_eq!(names(&selected), vec!["alpha"]);
     }
 
     #[test]
     fn empty_categories_impose_no_restriction() {
         let reg = registry();
-        // A bang-only query with no category still selects the named engine.
         let q = query_with(&[], &["beta"]);
-        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), Instant::now());
+        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new());
         assert_eq!(names(&selected), vec!["beta"]);
     }
 
@@ -445,7 +377,7 @@ mod tests {
         let reg = registry();
         let q = query_with(&["general"], &[]);
         let prefs = EnabledEngineSet::new(["alpha"]);
-        let selected = reg.select(&q, &prefs, &HashSet::new(), Instant::now());
+        let selected = reg.select(&q, &prefs, &HashSet::new());
         assert_eq!(names(&selected), vec!["alpha"]);
     }
 
@@ -456,7 +388,7 @@ mod tests {
             RegisteredEngine::new(StubEngine::arc("gamma", &["general"])),
         ]);
         let q = query_with(&["general"], &[]);
-        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), Instant::now());
+        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new());
         assert_eq!(names(&selected), vec!["gamma"]);
     }
 
@@ -468,80 +400,35 @@ mod tests {
         ]);
         let q = query_with(&["general"], &[]);
 
-        // Without the token, the token-gated engine is excluded.
-        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), Instant::now());
+        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new());
         assert_eq!(names(&selected), vec!["gamma"]);
 
-        // With the token present, it is selected.
         let tokens = HashSet::from(["secret".to_string()]);
-        let selected = reg.select(&q, &AllEnginesEnabled, &tokens, Instant::now());
+        let selected = reg.select(&q, &AllEnginesEnabled, &tokens);
         assert_eq!(names(&selected), vec!["alpha", "gamma"]);
     }
 
     #[test]
-    fn excludes_suspended_engine() {
-        let now = Instant::now();
-        let suspended = RegisteredEngine::new(StubEngine::arc("alpha", &["general"]));
-        // Suspend alpha until 1h from now.
-        suspended.state.lock().unwrap().on_error(
-            now,
-            &zoeken_engine_core::SuspendConfig::new(
-                1,
-                Duration::from_secs(3600),
-                Duration::from_secs(3600),
-            ),
-            "boom",
-            ErrorCategory::Unexpected,
-            None,
-        );
-        let reg = EngineRegistry::from_engines([
-            suspended,
-            RegisteredEngine::new(StubEngine::arc("gamma", &["general"])),
-        ]);
-        let q = query_with(&["general"], &[]);
-        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), now);
-        assert_eq!(names(&selected), vec!["gamma"]);
-        let held = reg.suspended_for_query(&q, &AllEnginesEnabled, &HashSet::new(), now);
-        assert_eq!(
-            held,
-            vec![(
-                "alpha".to_string(),
-                ErrorCategory::Unexpected,
-                "boom".to_string()
-            )]
-        );
-    }
-
-    #[test]
-    fn duckduckgo_captcha_does_not_suspend_but_other_engines_do() {
+    fn duckduckgo_captcha_does_not_open_circuit_but_other_engines_do() {
         let policy = SuspensionPolicy::default();
         assert_eq!(
-            policy.explicit_duration(&EngineError::Captcha("duckduckgo".to_string())),
+            policy.explicit_duration(
+                "duckduckgo",
+                &EngineError::Captcha("duckduckgo".to_string())
+            ),
+            Some(Duration::ZERO)
+        );
+        // Network-mapped captchas carry a message, not the engine id — still DDG.
+        assert_eq!(
+            policy.explicit_duration(
+                "duckduckgo",
+                &EngineError::Captcha("captcha: challenge page".to_string())
+            ),
             Some(Duration::ZERO)
         );
         assert_eq!(
-            policy.explicit_duration(&EngineError::Captcha("bing".to_string())),
+            policy.explicit_duration("bing", &EngineError::Captcha("bing".to_string())),
             Some(policy.captcha)
         );
-    }
-
-    #[test]
-    fn duckduckgo_stays_selectable_immediately_after_a_captcha_hit() {
-        let now = Instant::now();
-        let ddg = RegisteredEngine::new(StubEngine::arc("duckduckgo", &["general"]));
-        let policy = SuspensionPolicy::default();
-        let explicit = policy.explicit_duration(&EngineError::Captcha("duckduckgo".to_string()));
-        ddg.state.lock().unwrap().on_error(
-            now,
-            &policy.config,
-            "captcha",
-            ErrorCategory::Captcha,
-            explicit,
-        );
-
-        let reg = EngineRegistry::from_engines([ddg]);
-        let q = query_with(&["general"], &[]);
-        let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), now);
-        assert_eq!(names(&selected), vec!["duckduckgo"]);
     }
 }

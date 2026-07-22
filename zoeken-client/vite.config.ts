@@ -32,6 +32,7 @@ export default defineConfig(async ({ mode }) => {
 				"/search": "http://127.0.0.1:8888",
 				"/autocompleter": "http://127.0.0.1:8888",
 				"/config": "http://127.0.0.1:8888",
+				"/bangs": "http://127.0.0.1:8888",
 				"/preferences": "http://127.0.0.1:8888",
 				"/clear_cookies": "http://127.0.0.1:8888",
 				"/stats": "http://127.0.0.1:8888",

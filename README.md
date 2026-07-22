@@ -30,7 +30,7 @@ Or `make build` / `make package` on Unix.
 | [`default.config.yml`](default.config.yml) | Every configuration option at its typed default |
 | [`docs/settings.yml.example`](docs/settings.yml.example) | Full YAML settings reference |
 | [`docs/deployment.md`](docs/deployment.md) | Build, deb, systemd, Docker, GHCR |
-| [`docs/plugins.md`](docs/plugins.md) | Lua plugin API |
+| [`docs/client-features.md`](docs/client-features.md) | SPA client features (former plugins) |
 | [`docs/compatibility/scorecard.md`](docs/compatibility/scorecard.md) | Compatibility scorecard |
 | [`docs/compatibility/intentional-differences.md`](docs/compatibility/intentional-differences.md) | Deliberate gaps |
 | [`docs/security/audit.md`](docs/security/audit.md) | Security controls + residual risk |

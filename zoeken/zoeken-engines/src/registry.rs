@@ -1,11 +1,19 @@
 //! Build an [`EngineRegistry`] from [`Settings`]: default engine set, and the
 //! `settings.engines[]` name -> built-in-engine factory.
+//!
+//! # Engine list policy
+//!
+//! - Empty `engines:` → built-in catalog (common engines enabled; others disabled).
+//! - Non-empty + [`EngineListMode::Replace`] (default) → **only** listed engines
+//!   are registered (historical Zoeken behavior).
+//! - Non-empty + [`EngineListMode::Merge`] → listed entries overlay the built-in
+//!   catalog by engine id / name; omitted defaults stay.
 
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use zoeken_search::{EngineRegistry, RegisteredEngine};
-use zoeken_settings::Settings;
+use zoeken_settings::{EngineListMode, Settings};
 
 use crate::engines::{
     AppleAppStore, Arxiv, Bandcamp, Bing, BingImages, Brave, Core, Crates, Crossref, Currency,
@@ -20,18 +28,55 @@ use crate::engines::{
     builtin_generic_config,
 };
 
-/// Replace, not merge: a non-empty `settings.engines` entirely replaces the
-/// default set, one [`RegisteredEngine`] per entry.
+/// Build a registry from settings using [`SearchSettings::engine_list_mode`](
+/// zoeken_settings::SearchSettings::engine_list_mode).
 pub fn registry_from_settings(settings: &Settings) -> EngineRegistry {
     if settings.engines.is_empty() {
         return EngineRegistry::from_engines(default_engines());
     }
 
+    match settings.search.engine_list_mode {
+        EngineListMode::Replace => registry_replace(settings),
+        EngineListMode::Merge => registry_merge(settings),
+    }
+}
+
+fn registry_replace(settings: &Settings) -> EngineRegistry {
     let mut registered = Vec::new();
     for cfg in &settings.engines {
         match engine_from_settings(cfg) {
             Some(re) => registered.push(apply_engine_settings(re, cfg)),
             None => {
+                tracing::warn!(
+                    engine = %cfg.name,
+                    "settings.engines references an engine with no built-in implementation; ignoring"
+                );
+            }
+        }
+    }
+
+    EngineRegistry::from_engines(registered)
+}
+
+fn registry_merge(settings: &Settings) -> EngineRegistry {
+    let mut registered = default_engines();
+    for cfg in &settings.engines {
+        let key = cfg.engine.as_deref().unwrap_or(&cfg.name);
+        let existing = registered
+            .iter()
+            .position(|re| re.name() == key || re.name() == cfg.name);
+
+        match (existing, engine_from_settings(cfg)) {
+            (Some(idx), Some(re)) => {
+                registered[idx] = apply_engine_settings(re, cfg);
+            }
+            (Some(idx), None) => {
+                registered[idx] = apply_engine_settings(registered[idx].clone(), cfg);
+            }
+            (None, Some(re)) => {
+                registered.push(apply_engine_settings(re, cfg));
+            }
+            (None, None) => {
                 tracing::warn!(
                     engine = %cfg.name,
                     "settings.engines references an engine with no built-in implementation; ignoring"
@@ -385,6 +430,8 @@ fn categories_to_vec(categories: &zoeken_settings::StringOrVec) -> Vec<String> {
 mod tests {
     use super::*;
 
+    use zoeken_settings::EngineListMode;
+
     fn find<'a>(reg: &'a EngineRegistry, name: &str) -> &'a RegisteredEngine {
         reg.engines()
             .iter()
@@ -462,6 +509,91 @@ mod tests {
         assert_eq!(bing.weight, Some(3.0));
         assert_eq!(bing.categories, Some(vec!["images".to_string()]));
         assert_eq!(bing.shortcuts, vec!["bi".to_string()]);
+    }
+
+    #[test]
+    fn build_registry_replace_mode_is_default_for_nonempty_engines() {
+        let settings = Settings {
+            engines: vec![zoeken_settings::EngineSettings {
+                name: "gitlab".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            settings.search.engine_list_mode,
+            EngineListMode::Replace
+        );
+        let reg = registry_from_settings(&settings);
+        assert_eq!(reg.engines().len(), 1);
+        assert_eq!(reg.engines()[0].name(), "gitlab");
+        assert!(
+            reg.engines().iter().all(|re| re.name() != "duckduckgo"),
+            "replace mode must drop defaults not listed in engines:"
+        );
+    }
+
+    #[test]
+    fn build_registry_merge_mode_overlays_defaults() {
+        let mut marginalia = zoeken_settings::EngineSettings {
+            name: "marginalia".to_string(),
+            engine: Some("marginalia".to_string()),
+            ..Default::default()
+        };
+        marginalia.extra.insert(
+            "api_key".to_string(),
+            serde_yaml_ng::Value::String("test-key".to_string()),
+        );
+
+        let settings = Settings {
+            search: zoeken_settings::SearchSettings {
+                engine_list_mode: EngineListMode::Merge,
+                ..Default::default()
+            },
+            engines: vec![
+                zoeken_settings::EngineSettings {
+                    name: "duckduckgo".to_string(),
+                    disabled: Some(true),
+                    shortcut: Some("ddg".to_string()),
+                    ..Default::default()
+                },
+                marginalia,
+            ],
+            ..Default::default()
+        };
+
+        let reg = registry_from_settings(&settings);
+        assert_eq!(reg.engines().len(), default_engines().len() + 1);
+
+        let ddg = find(&reg, "duckduckgo");
+        assert!(ddg.disabled);
+        assert_eq!(ddg.shortcuts, vec!["ddg".to_string()]);
+
+        assert!(
+            reg.engines().iter().any(|re| re.name() == "brave"),
+            "merge keeps defaults not mentioned in engines:"
+        );
+        assert!(reg.engines().iter().any(|re| re.name() == "marginalia"));
+    }
+
+    #[test]
+    fn build_registry_merge_mode_can_disable_without_dropping_catalog() {
+        let settings = Settings {
+            search: zoeken_settings::SearchSettings {
+                engine_list_mode: EngineListMode::Merge,
+                ..Default::default()
+            },
+            engines: vec![zoeken_settings::EngineSettings {
+                name: "bing".to_string(),
+                disabled: Some(true),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let reg = registry_from_settings(&settings);
+        assert_eq!(reg.engines().len(), default_engines().len());
+        assert!(find(&reg, "bing").disabled);
+        assert!(!find(&reg, "duckduckgo").disabled);
     }
 
     #[test]

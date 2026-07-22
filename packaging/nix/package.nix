@@ -18,16 +18,14 @@ pkgs.stdenvNoCC.mkDerivation {
     runHook preInstall
 
     install -Dm755 "$src/zoeken-server" "$out/libexec/zoeken-server"
-    mkdir -p "$out/share/zoeken/assets" "$out/share/zoeken/plugins" "$out/etc/zoeken"
+    mkdir -p "$out/share/zoeken/assets" "$out/etc/zoeken"
     cp -R "$src/assets/." "$out/share/zoeken/assets/"
-    cp -R "$src/plugins/." "$out/share/zoeken/plugins/"
     install -Dm644 "$src/settings.yml" "$out/etc/zoeken/settings.yml"
     install -Dm644 "$src/limiter.toml" "$out/etc/zoeken/limiter.toml"
     install -Dm644 "$src/default.config.yml" "$out/share/doc/zoeken/default.config.yml"
     install -Dm644 "$src/LICENSE" "$out/share/licenses/zoeken/LICENSE"
 
     substituteInPlace "$out/etc/zoeken/settings.yml" \
-      --replace-fail "/usr/share/zoeken/plugins" "$out/share/zoeken/plugins" \
       --replace-fail "/etc/zoeken/limiter.toml" "$out/etc/zoeken/limiter.toml"
 
     makeWrapper "$out/libexec/zoeken-server" "$out/bin/zoeken-server" \

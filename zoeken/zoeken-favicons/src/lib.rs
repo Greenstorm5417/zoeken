@@ -14,11 +14,14 @@
 //!   (12.3), and unresolved-fallback (12.4) behaviors.
 //! * [`image_proxy_decision`] is a pure function implementing the `/image_proxy`
 //!   content-type and size policy (14.7).
+//! * [`safe_outbound_get`] / [`SafeOutboundTransport`] are the shared SSRF-safe
+//!   GET helpers used by favicon resolution and the image proxy.
 
 mod cache;
 mod hmac;
 mod proxy;
 mod resolver;
+mod safe_outbound;
 mod service;
 
 pub use cache::{CacheLookup, Favicon, FaviconCache, InMemoryFaviconCache};
@@ -28,7 +31,11 @@ pub use proxy::{
     ProxyUrlRejection, image_proxy_decision, validate_proxy_authority, validate_proxy_url,
 };
 pub use resolver::{
-    FaviconResolver, HttpFaviconResolver, IMAGE_ACCEPT, MAX_REDIRECT_HOPS, ResolveError,
-    ResolveFuture, StaticResolver, get_following_safe_redirects,
+    FaviconResolver, HttpFaviconResolver, ResolveError, ResolveFuture, StaticResolver,
+};
+pub use safe_outbound::{
+    IMAGE_ACCEPT, MAX_REDIRECT_HOPS, SafeOutboundBody, SafeOutboundTransport,
+    get_following_safe_redirects, get_following_safe_redirects_coordinated, safe_outbound_get,
+    safe_outbound_get_coordinated,
 };
 pub use service::{FaviconOutcome, FaviconProvider, FaviconService, StorageFaviconService};

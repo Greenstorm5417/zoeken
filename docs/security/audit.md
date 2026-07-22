@@ -29,7 +29,8 @@ arbitrary queries, forge headers, and try to turn zoeken into an open proxy.
 - **`/metrics` and `/stats` auth**: set `general.open_metrics` (HTTP Basic
   password) on public instances; empty leaves `/stats` open and hides `/metrics`.
   Edge restriction remains optional defense in depth.
-- **Per-request TLS verify disable**: fails closed (`intentional-differences.md`).
+- **TLS verify disable / custom CA**: rejected at network build
+  (`intentional-differences.md`). Verification is always on.
 - **No CORS layer**: SPA is same-origin. Do not enable open CORS without review.
 - **Theme cookie field**: still accepted for SearXNG cookie compatibility; SPA
   ignores it (OS `prefers-color-scheme` only).

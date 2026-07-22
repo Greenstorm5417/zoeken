@@ -1,5 +1,5 @@
 /**
- * Hash/encode/decode intent detection — mirrors zoeken-answerers' CryptoAnswerer.
+ * Hash/encode/decode intent detection — SPA client-feature (former answerer).
  * Digests/encodings are computed in the browser by CryptoAnswer.tsx, not here.
  */
 import type { InteractiveAnswer, SearchAnswer } from "../api";

@@ -11,8 +11,6 @@ description.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-regex = { workspace = true }
-url = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 whatlang = { workspace = true }

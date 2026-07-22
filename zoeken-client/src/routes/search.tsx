@@ -5,15 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import { InstantAnswerCard } from "#/components/answers/InstantAnswerCard";
 import { ImageLightbox } from "#/components/ImageLightbox";
 import { InfoboxCard } from "#/components/InfoboxCard";
-import { coordsFromResult, MapCanvas } from "#/components/MapCanvas";
-import {
-	MapResult,
-	ResultItem,
-	specializedTemplate,
-} from "#/components/ResultTemplates";
 import { SearchForm } from "#/components/SearchForm";
+import { SearchResultList } from "#/components/SearchResultList";
 import { SelectMenu } from "#/components/SelectMenu";
-import { VideoCard } from "#/components/VideoCard";
 import { ApiError, autocomplete, type SearchResult, search } from "#/lib/api";
 import { applyClientFeatures } from "#/lib/clientFeatures";
 import { pickDidYouMean } from "#/lib/didYouMean";
@@ -22,7 +16,6 @@ import { parseSearchParams } from "#/lib/searchParams";
 import {
 	DEFAULT_CATEGORIES,
 	correctionText,
-	engineNames,
 	formatEngineLabel,
 	pageNumbers,
 	searchLink,
@@ -576,108 +569,24 @@ function SearchPage() {
 								<InstantAnswerCard key={a.answer} answer={a} />
 							))}
 
-							{results.length === 0 &&
-							answers.length === 0 &&
-							firstPage.infoboxes.length === 0 ? (
-								<div className="max-w-[40rem] rounded-2xl border border-line bg-surface-raised px-5 py-4">
-									<p className="font-medium text-ink">
-										{t.noResults} · “{q}”
-									</p>
-									<p className="mt-1 text-sm text-ink-muted">
-										{t.tryDifferent}
-									</p>
-								</div>
-							) : results.length === 0 ? null : videoMode ? (
-								<ul className="grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-									{results.map((result) => (
-										<li key={result.url}>
-											<VideoCard
-												result={result}
-												newTab={config?.ui?.results_on_new_tab}
-											/>
-										</li>
-									))}
-								</ul>
-							) : imageMode ? (
-								<ul className="grid max-w-5xl grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-									{results
-										.filter((r) => r.thumbnail || r.img_src)
-										.map((result) => (
-											<li key={result.url}>
-												<button
-													type="button"
-													onClick={() => setLightbox(result)}
-													className="group block w-full overflow-hidden rounded-xl text-left"
-												>
-													<img
-														src={result.thumbnail || result.img_src}
-														alt={result.title || ""}
-														className="aspect-square w-full bg-surface-raised object-cover transition-transform duration-150 group-hover:scale-[1.01]"
-														loading="lazy"
-													/>
-													<p className="mt-1.5 truncate text-xs text-ink-muted group-hover:text-accent">
-														{result.title || "Image"}
-													</p>
-													{result.resolution &&
-													result.resolution !== "unknown" ? (
-														<p className="truncate text-[0.65rem] text-ink-subtle">
-															{result.resolution}
-															{result.img_format
-																? ` · ${result.img_format}`
-																: ""}
-														</p>
-													) : null}
-												</button>
-											</li>
-										))}
-								</ul>
-							) : mapMode ? (
-								<div className="flex flex-col gap-4">
-									<MapCanvas
-										points={results
-											.map(coordsFromResult)
-											.filter((p): p is NonNullable<typeof p> => p != null)}
-									/>
-									<ul className="flex flex-col gap-4">
-										{results.map((result) => (
-											<li key={result.url}>
-												<MapResult
-													result={result}
-													newTab={config?.ui?.results_on_new_tab}
-												/>
-											</li>
-										))}
-									</ul>
-								</div>
-							) : (
-								<ul className="flex flex-col gap-8">
-									{results.map((result) => {
-										const Template = specializedTemplate(
-											result,
-											activeCategory,
-										);
-										return (
-											<li
-												key={`${result.url}:${engineNames(result).join(",")}`}
-											>
-												{Template ? (
-													<Template
-														result={result}
-														newTab={config?.ui?.results_on_new_tab}
-													/>
-												) : (
-													<ResultItem
-														result={result}
-														newTab={config?.ui?.results_on_new_tab}
-														urlFormatting={config?.ui?.url_formatting}
-														cacheUrl={config?.ui?.cache_url}
-													/>
-												)}
-											</li>
-										);
-									})}
-								</ul>
-							)}
+							<SearchResultList
+								results={results}
+								activeCategory={activeCategory}
+								videoMode={videoMode}
+								imageMode={imageMode}
+								mapMode={mapMode}
+								newTab={config?.ui?.results_on_new_tab}
+								urlFormatting={config?.ui?.url_formatting}
+								cacheUrl={config?.ui?.cache_url}
+								onOpenImage={setLightbox}
+								empty={
+									results.length === 0 &&
+									answers.length === 0 &&
+									firstPage.infoboxes.length === 0
+								}
+								emptyTitle={`${t.noResults} · “${q}”`}
+								emptyHint={t.tryDifferent}
+							/>
 
 							{firstPage.suggestions.length > 0 ? (
 								<section className="mt-14 max-w-[38rem]">

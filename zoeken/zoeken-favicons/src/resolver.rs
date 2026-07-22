@@ -2,12 +2,13 @@
 
 use std::future::Future;
 use std::pin::Pin;
-
-use futures_util::StreamExt;
 use std::sync::Arc;
-use zoeken_network::{NetworkManager, NetworkRequest};
+use std::time::Duration;
+
+use zoeken_network::NetworkManager;
 
 use crate::cache::Favicon;
+use crate::safe_outbound::SafeOutboundTransport;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
@@ -36,8 +37,8 @@ pub struct StaticResolver {
 #[derive(Debug, Clone)]
 enum StaticOutcome {
     Favicon(Favicon),
-    None,
-    Error(String),
+    Missing,
+    Fail(String),
 }
 
 impl StaticResolver {
@@ -53,15 +54,15 @@ impl StaticResolver {
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            outcome: StaticOutcome::None,
+            outcome: StaticOutcome::Missing,
         }
     }
 
-    /// A resolver whose every attempt fails.
-    pub fn failing(name: impl Into<String>, message: impl Into<String>) -> Self {
+    /// A resolver that always fails.
+    pub fn failing(name: impl Into<String>, reason: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            outcome: StaticOutcome::Error(message.into()),
+            outcome: StaticOutcome::Fail(reason.into()),
         }
     }
 }
@@ -72,70 +73,23 @@ impl FaviconResolver for StaticResolver {
     }
 
     fn resolve<'a>(&'a self, _authority: &'a str) -> ResolveFuture<'a> {
-        let outcome = self.outcome.clone();
         Box::pin(async move {
-            match outcome {
-                StaticOutcome::Favicon(f) => Ok(Some(f)),
-                StaticOutcome::None => Ok(None),
-                StaticOutcome::Error(m) => Err(ResolveError::Upstream(m)),
+            match &self.outcome {
+                StaticOutcome::Favicon(favicon) => Ok(Some(favicon.clone())),
+                StaticOutcome::Missing => Ok(None),
+                StaticOutcome::Fail(reason) => Err(ResolveError::Upstream(reason.clone())),
             }
         })
     }
 }
 
-/// Browser-like `Accept` header for image fetches.
-pub const IMAGE_ACCEPT: &str = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
-
-/// Redirect hop budget for proxied image/favicon fetches.
-pub const MAX_REDIRECT_HOPS: usize = 4;
-
-/// GET `url` with `client`, following up to `max_hops` redirects manually so
-/// that every hop (not just the first URL) passes the SSRF policy in
-/// [`crate::validate_proxy_url`]. Client-level redirect following is disabled
-/// per request; a redirect without a usable `Location` is returned as-is.
-pub async fn get_following_safe_redirects(
-    client: &wreq::Client,
-    url: &str,
-    max_hops: usize,
-) -> Result<wreq::Response, String> {
-    let mut current = url.to_string();
-    for _ in 0..=max_hops {
-        crate::validate_proxy_url(&current).map_err(|rejection| rejection.reason().to_string())?;
-        let resp = client
-            .get(&current)
-            .redirect(wreq::redirect::Policy::none())
-            .header(http::header::ACCEPT, IMAGE_ACCEPT)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_redirection() {
-            return Ok(resp);
-        }
-        let Some(location) = resp
-            .headers()
-            .get(http::header::LOCATION)
-            .and_then(|v| v.to_str().ok())
-        else {
-            return Ok(resp);
-        };
-        current = url::Url::parse(&current)
-            .ok()
-            .and_then(|base| base.join(location).ok())
-            .map(String::from)
-            .ok_or_else(|| "invalid redirect location".to_string())?;
-    }
-    Err("too many redirects".to_string())
-}
+/// Cap favicon payloads (typical icons are tiny; reject pathological bodies).
+const MAX_FAVICON_BYTES: usize = 1024 * 1024;
 
 /// Fetches `https://{authority}/favicon.ico` (shortest network path).
 pub struct HttpFaviconResolver {
     provider: String,
-    transport: ResolverTransport,
-}
-
-enum ResolverTransport {
-    Direct(wreq::Client),
-    Coordinated(Arc<NetworkManager>),
+    transport: SafeOutboundTransport,
 }
 
 impl std::fmt::Debug for HttpFaviconResolver {
@@ -158,12 +112,12 @@ impl HttpFaviconResolver {
         // every favicon fetch dominated resolution latency.
         let client = wreq::Client::builder()
             .redirect(wreq::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(Duration::from_secs(10))
             .build()
             .expect("build favicon HTTP client");
         Self {
             provider: provider.to_string(),
-            transport: ResolverTransport::Direct(client),
+            transport: SafeOutboundTransport::Direct(client),
         }
     }
 
@@ -173,7 +127,11 @@ impl HttpFaviconResolver {
     pub fn for_provider_with_network(provider: &str, network: Arc<NetworkManager>) -> Self {
         Self {
             provider: provider.to_string(),
-            transport: ResolverTransport::Coordinated(network),
+            transport: SafeOutboundTransport::Coordinated {
+                network,
+                network_name: "favicon",
+                timeout: Duration::from_secs(10),
+            },
         }
     }
 
@@ -191,56 +149,6 @@ impl HttpFaviconResolver {
             "allesedv" => format!("https://f1.allesedv.com/32/{authority}"),
             _ => format!("https://{authority}/favicon.ico"),
         }
-    }
-
-    async fn get_following_safe_redirects(&self, url: &str) -> Result<wreq::Response, String> {
-        let mut current = url.to_string();
-        for _ in 0..=MAX_REDIRECT_HOPS {
-            crate::validate_proxy_url(&current)
-                .map_err(|rejection| rejection.reason().to_string())?;
-            let response = match &self.transport {
-                ResolverTransport::Direct(client) => client
-                    .get(&current)
-                    .redirect(wreq::redirect::Policy::none())
-                    .header(http::header::ACCEPT, IMAGE_ACCEPT)
-                    .send()
-                    .await
-                    .map_err(|error| error.to_string())?,
-                ResolverTransport::Coordinated(network) => {
-                    let mut headers = http::HeaderMap::new();
-                    headers.insert(
-                        http::header::ACCEPT,
-                        http::HeaderValue::from_static(IMAGE_ACCEPT),
-                    );
-                    network
-                        .request(
-                            "favicon",
-                            NetworkRequest::get(&current)
-                                .with_headers(headers)
-                                .with_max_redirects(0)
-                                .with_timeout(std::time::Duration::from_secs(10)),
-                        )
-                        .await
-                        .map_err(|error| error.to_string())?
-                }
-            };
-            if !response.status().is_redirection() {
-                return Ok(response);
-            }
-            let Some(location) = response
-                .headers()
-                .get(http::header::LOCATION)
-                .and_then(|value| value.to_str().ok())
-            else {
-                return Ok(response);
-            };
-            current = url::Url::parse(&current)
-                .ok()
-                .and_then(|base| base.join(location).ok())
-                .map(String::from)
-                .ok_or_else(|| "invalid redirect location".to_string())?;
-        }
-        Err("too many redirects".to_string())
     }
 }
 
@@ -264,34 +172,21 @@ impl FaviconResolver for HttpFaviconResolver {
                 return Err(ResolveError::Upstream("disallowed authority".into()));
             }
             let url = self.url(authority);
-            let resp = self
-                .get_following_safe_redirects(&url)
+            let fetched = self
+                .transport
+                .get(&url, MAX_FAVICON_BYTES)
                 .await
                 .map_err(ResolveError::Upstream)?;
-            if resp.status().as_u16() != 200 {
+            if fetched.status != 200 {
                 return Ok(None);
             }
-            let mime = resp
-                .headers()
-                .get(http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("image/x-icon")
-                .to_string();
-            // Cap favicon payloads (typical icons are tiny; reject pathological bodies).
-            const MAX_FAVICON_BYTES: usize = 1024 * 1024;
-            let mut data = Vec::new();
-            let mut stream = resp.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| ResolveError::Upstream(e.to_string()))?;
-                if data.len().saturating_add(chunk.len()) > MAX_FAVICON_BYTES {
-                    return Err(ResolveError::Upstream("favicon exceeds size limit".into()));
-                }
-                data.extend_from_slice(&chunk);
-            }
-            if data.is_empty() {
+            if fetched.body.is_empty() {
                 return Ok(None);
             }
-            Ok(Some(Favicon::new(data, mime)))
+            let mime = fetched
+                .content_type
+                .unwrap_or_else(|| "image/x-icon".to_string());
+            Ok(Some(Favicon::new(fetched.body, mime)))
         })
     }
 }

@@ -116,7 +116,8 @@ pub fn startup_asset_check(assets: &dyn AssetSource, location: &str) -> Result<(
     } else {
         Err(format!(
             "startup aborted: frontend assets missing: no `{INDEX_HTML}` found in {location}; \
-             build the frontend into the asset source before starting (Req 1.3)"
+             build the frontend into the asset source before starting, or set APP_DISABLE_UI=1 \
+             / server.disable_ui for JSON-only deploys"
         ))
     }
 }
@@ -400,6 +401,10 @@ mod tests {
         assert!(
             err.contains(&location),
             "error must identify the asset location"
+        );
+        assert!(
+            err.contains("APP_DISABLE_UI") || err.contains("disable_ui"),
+            "error must mention JSON-only skip"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

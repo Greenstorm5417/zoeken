@@ -60,13 +60,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --uid 10001 --create-home --home-dir /app zoeken \
-    && mkdir -p /usr/share/licenses/zoeken /usr/share/doc/zoeken /usr/share/zoeken/plugins /etc/zoeken /var/lib/zoeken \
+    && mkdir -p /usr/share/licenses/zoeken /usr/share/doc/zoeken /etc/zoeken /var/lib/zoeken \
     && chown zoeken:zoeken /var/lib/zoeken
 WORKDIR /app
 
 COPY --from=backend /src/target/release/zoeken-server /app/zoeken-server
 COPY --from=client /src/zoeken/zoeken-server/assets /app/assets
-COPY --from=backend /src/zoeken/zoeken-plugins/plugins /usr/share/zoeken/plugins
 COPY packaging/debian/zoeken.settings.yml /etc/zoeken/settings.yml
 COPY packaging/debian/limiter.toml /etc/zoeken/limiter.toml
 COPY default.config.yml /usr/share/doc/zoeken/default.config.yml

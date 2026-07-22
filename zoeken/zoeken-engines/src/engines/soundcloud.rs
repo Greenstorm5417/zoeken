@@ -2,6 +2,9 @@
 //!
 //! Requires guest client_id injected via engine_data; builds locale-mapped app_locale parameter.
 
+use std::collections::HashMap;
+use std::future::Future;
+
 use zoeken_engine_core::{
     About, Engine, EngineError, EngineMeta, EngineResponse, EngineResults, HttpMethod, Processor,
     RequestParams, SearchQueryView,
@@ -15,11 +18,94 @@ pub const NAME: &str = "soundcloud";
 
 const SEARCH_URL: &str = "https://api-v2.soundcloud.com/search";
 
+/// SoundCloud web home used to discover JS assets that embed the guest client_id.
+pub const HOME_URL: &str = "https://soundcloud.com/";
+
 const PAGE_SIZE: u32 = 10;
 
 const FACET: &str = "model";
 
 pub const CLIENT_ID_KEY: &str = "client_id";
+
+const ASSET_PREFIX: &str = "https://a-v2.sndcdn.com/assets/";
+
+/// JS asset URLs referenced from the SoundCloud home page HTML.
+pub fn asset_urls(html: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut rest = html;
+    while let Some(pos) = rest.find(ASSET_PREFIX) {
+        let after = &rest[pos..];
+        let end = after.find(['"', '\'']).unwrap_or(after.len());
+        let url = &after[..end];
+        if url.ends_with(".js") {
+            urls.push(url.to_string());
+        }
+        rest = &after[end..];
+    }
+    urls
+}
+
+/// Extract the `client_id:"..."` guest token from a SoundCloud JS asset body.
+pub fn extract_client_id(js: &str) -> Option<String> {
+    const KEY: &str = "client_id:\"";
+    let start = js.find(KEY)? + KEY.len();
+    let tail = &js[start..];
+    let end = tail.find('"')?;
+    let id = &tail[..end];
+    if id.len() >= 20 && id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+/// Scrape a guest `client_id` by fetching the home page and its JS assets via `fetch`.
+///
+/// `fetch` returns the response body text for a URL, or `None` on failure.
+pub async fn fetch_guest_client_id<F, Fut>(mut fetch: F) -> Option<String>
+where
+    F: FnMut(&str) -> Fut,
+    Fut: Future<Output = Option<String>>,
+{
+    let html = fetch(HOME_URL).await?;
+    for asset_url in asset_urls(&html) {
+        let Some(js) = fetch(&asset_url).await else {
+            continue;
+        };
+        if let Some(id) = extract_client_id(&js) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Ensure `engine_data` has a guest `client_id`, scraping once per process on miss.
+///
+/// `fetch` is a thin HTTP transport callback supplied by the executor.
+pub async fn ensure_guest_client_id<F, Fut>(
+    engine_data: &mut HashMap<String, String>,
+    fetch: F,
+) -> bool
+where
+    F: FnMut(&str) -> Fut,
+    Fut: Future<Output = Option<String>>,
+{
+    if engine_data
+        .get(CLIENT_ID_KEY)
+        .is_some_and(|id| !id.is_empty())
+    {
+        return true;
+    }
+    static CACHE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    let Ok(id) = CACHE
+        .get_or_try_init(|| async { fetch_guest_client_id(fetch).await.ok_or(()) })
+        .await
+    else {
+        return false;
+    };
+    engine_data.insert(CLIENT_ID_KEY.to_string(), id.clone());
+    true
+}
 
 /// The SoundCloud engine.
 #[derive(Debug, Clone)]
@@ -89,6 +175,16 @@ fn resolve_app_locale(locale: &str) -> &'static str {
 impl Engine for Soundcloud {
     fn metadata(&self) -> &EngineMeta {
         &self.meta
+    }
+
+    fn prepare_request(&self, params: &mut RequestParams) {
+        if !params
+            .engine_data
+            .get(CLIENT_ID_KEY)
+            .is_some_and(|id| !id.is_empty())
+        {
+            params.needs_client_id = true;
+        }
     }
 
     fn request(&self, q: &SearchQueryView, p: &mut RequestParams) {
@@ -352,5 +448,35 @@ mod tests {
         assert_eq!(resolve_app_locale("pt-BR"), "pt_BR");
         assert_eq!(resolve_app_locale("pap"), "pt_BR");
         assert_eq!(resolve_app_locale("zh"), "en");
+    }
+
+    #[test]
+    fn prepare_request_marks_missing_client_id() {
+        let engine = Soundcloud::new();
+        let mut params = RequestParams::default();
+        engine.prepare_request(&mut params);
+        assert!(params.needs_client_id);
+
+        params
+            .engine_data
+            .insert(CLIENT_ID_KEY.to_string(), "abc".into());
+        params.needs_client_id = false;
+        engine.prepare_request(&mut params);
+        assert!(!params.needs_client_id);
+    }
+
+    #[test]
+    fn extracts_client_id_from_js_and_asset_urls_from_html() {
+        let html = r#"<script src="https://a-v2.sndcdn.com/assets/42-app.js"></script>
+                      <link href="https://a-v2.sndcdn.com/assets/style.css">"#;
+        assert_eq!(
+            asset_urls(html),
+            vec!["https://a-v2.sndcdn.com/assets/42-app.js".to_string()]
+        );
+        assert_eq!(
+            extract_client_id(r#"foo client_id:"abcdefghijklmnopqrst" bar"#).as_deref(),
+            Some("abcdefghijklmnopqrst")
+        );
+        assert!(extract_client_id(r#"client_id:"short""#).is_none());
     }
 }

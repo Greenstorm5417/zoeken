@@ -8,7 +8,7 @@
       "upstream_count": 248
     },
     {
-      "rust": "zoeken/zoeken-plugins",
+      "rust": "zoeken-client/src/lib/clientFeatures",
       "rust_count": 15,
       "system": "plugins",
       "upstream": "searx/plugins",

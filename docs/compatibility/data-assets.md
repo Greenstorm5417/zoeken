@@ -10,7 +10,7 @@ Tracked assets: 13. Present: 12. Missing: 0.
 | engine traits | present | engine_traits.json | engine_traits.json | bundled in zoeken/zoeken-data/data |
 | locales | present | locales.json | locales.json | bundled in zoeken/zoeken-data/data |
 | user agents | present | useragents.json, gsa_useragents.txt | gsa_useragents.txt, useragents.json | bundled in zoeken/zoeken-data/data |
-| tracker patterns | present | data/tracker_patterns.json, tracker_patterns.json | tracker_patterns.json | bundled in zoeken/zoeken-data/data |
+| tracker patterns | present | data/tracker_patterns.json, tracker_patterns.json | tracker_patterns.json | SPA source in zoeken-data/data; synced to zoeken-client (not server-embedded) |
 | Ahmia blacklist | present | data/ahmia_blacklist.txt, ahmia_blacklist.txt, data/ahmia_blacklist.json, ahmia_blacklist.json | ahmia_blacklist.txt | bundled in zoeken/zoeken-data/data |
 | DOI resolvers | present | settings.yml, doi_resolvers.json | doi_resolvers.json | bundled in zoeken/zoeken-data/data |
 | engine descriptions | unknown-upstream | data/engines_languages.json, engines_languages.json |  | not bundled yet |

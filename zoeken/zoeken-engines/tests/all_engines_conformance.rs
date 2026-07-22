@@ -1,4 +1,8 @@
 //! Aggregate conformance test for all ported engines.
+//!
+//! Hand list here mirrors fixture dirs; the live factory is
+//! `zoeken_engines::registry_from_settings` — keep new engines in both
+//! (or extend generation later). `tools/compat_inventory.py` owns docs inventory.
 
 use std::path::PathBuf;
 

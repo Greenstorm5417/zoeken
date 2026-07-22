@@ -102,4 +102,18 @@ describe("applyClientFeatures", () => {
 		});
 		expect(applyClientFeatures(results, cfg)).toEqual(results);
 	});
+
+	it("strips trackers when tracker_url_remover is enabled", () => {
+		const results = [result("https://example.com/?utm_source=x&keep=1")];
+		const cfg = config({ plugins: [plugin("tracker_url_remover", true)] });
+		const out = applyClientFeatures(results, cfg);
+		expect(out[0].url).not.toContain("utm_source");
+		expect(out[0].url).toContain("keep=1");
+	});
+
+	it("skips tracker stripping when the plugin is disabled", () => {
+		const results = [result("https://example.com/?utm_source=x")];
+		const cfg = config({ plugins: [plugin("tracker_url_remover", false)] });
+		expect(applyClientFeatures(results, cfg)).toEqual(results);
+	});
 });

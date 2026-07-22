@@ -9,12 +9,9 @@ homepage.workspace = true
 description.workspace = true
 
 [dependencies]
-tower = { workspace = true }
-tokio = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
-axum = { workspace = true }
 ipnet = { workspace = true }
 tracing = { workspace = true }
 moka = { workspace = true }

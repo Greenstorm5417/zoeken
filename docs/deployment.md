@@ -93,7 +93,6 @@ sudo systemctl status zoeken
 | --- | --- |
 | `/usr/bin/zoeken-server` | server binary |
 | `/usr/share/zoeken/assets/` | SPA |
-| `/usr/share/zoeken/plugins/` | bundled Lua plugins |
 | `/usr/share/doc/zoeken/LICENSE` | AGPL-3.0-or-later full text |
 | `/usr/share/doc/zoeken/copyright` | Debian copyright file |
 | `/usr/share/doc/zoeken/changelog.Debian.gz` | Debian changelog |

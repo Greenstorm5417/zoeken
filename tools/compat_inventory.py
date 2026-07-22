@@ -26,7 +26,7 @@ DEFAULT_UPSTREAM_URL = "https://github.com/searxng/searxng.git"
 
 SYSTEMS = {
     "engines": ("searx/engines", "zoeken/zoeken-engines"),
-    "plugins": ("searx/plugins", "zoeken/zoeken-plugins"),
+    "plugins": ("searx/plugins", "zoeken-client/src/lib/clientFeatures"),
     "search": ("searx/search", "zoeken/zoeken-search"),
     "results": ("searx/results.py", "zoeken/zoeken-results"),
     "settings": ("searx/settings*.py, searx/settings.yml", "zoeken/zoeken-settings"),
@@ -87,7 +87,7 @@ INTENTIONALLY_SKIPPED = {
     "baidu": "bespoke regional engine not supported",
     "cloudflareai": "requires Cloudflare AI credentials and custom request flow",
     "command": "command engines require an explicit sandbox decision",
-    "currency_convert": "online_currency processor specialization deferred",
+    "currency_convert": "online_currency processor specialization removed; use Zoeken currency engine",
     "deezer": "requires Deezer API credentials / bespoke media flow",
     "demo_offline": "SearXNG demo engine",
     "demo_online": "SearXNG demo engine",
@@ -742,8 +742,12 @@ def write_scorecard(
     engine_counts = _count_status(engines["engines"])
     route_counts = _count_status(routes["routes"])
     data_counts = _count_status(data_assets["assets"])
-    plugins_dir = ROOT / "zoeken" / "zoeken-plugins" / "plugins"
-    plugin_files = sorted(p.stem for p in plugins_dir.glob("*.lua")) if plugins_dir.exists() else []
+    plugins_dir = ROOT / "zoeken-client" / "src" / "lib" / "clientFeatures"
+    feature_files = sorted(
+        p.stem
+        for p in plugins_dir.glob("*.ts")
+        if p.stem not in {"index"} and not p.stem.endswith(".test")
+    )
     client = ROOT / "zoeken-client"
     frontend = "SPA (zoeken-client → zoeken-server/assets)" if client.exists() else "missing"
 
@@ -762,7 +766,7 @@ CI validates this file exists via `--check`.
 | Engines | {fmt(engine_counts)} (total {sum(engine_counts.values())}) |
 | Routes | {fmt(route_counts)} (total {sum(route_counts.values())}) |
 | Data assets | {fmt(data_counts)} (total {sum(data_counts.values())}) |
-| Lua plugins on disk | {len(plugin_files)} (`{', '.join(plugin_files)}`) |
+| SPA client-features | {len(feature_files)} (`{', '.join(feature_files)}`) |
 | Frontend | {frontend} |
 | Near-term target | API + admin/config compatibility (`targets.md`) |
 

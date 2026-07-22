@@ -53,6 +53,22 @@ pub struct ResultContainer {
     pub number_of_results: usize,
 }
 
+impl From<EngineResults> for ResultContainer {
+    /// Lift a single-engine bag into an aggregate container (no run metadata).
+    fn from(results: EngineResults) -> Self {
+        Self {
+            results: results.results,
+            answers: results.answers,
+            suggestions: results.suggestions,
+            corrections: results.corrections,
+            infoboxes: results.infoboxes,
+            unresponsive_engines: Vec::new(),
+            engine_data: results.engine_data,
+            number_of_results: 0,
+        }
+    }
+}
+
 struct Merged {
     result: Result_,
     engines: Vec<String>,

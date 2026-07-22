@@ -26,10 +26,11 @@ use tracing::Span;
 use tracing::field::Empty;
 use tracing_subscriber::filter::LevelFilter;
 use url::Url;
-use zoeken_botdetect::BotDetectLayer;
 use zoeken_botdetect::client_ip;
 use zoeken_botdetect::config::parse_ip_or_net;
 use zoeken_settings::DeploymentConfig;
+
+use crate::limiter::BotDetectLayer;
 
 const HSTS_VALUE: &str = "max-age=63072000; includeSubDomains";
 
@@ -936,7 +937,9 @@ mod trace_tests {
 
     fn capture(body: impl FnOnce()) -> BTreeMap<String, String> {
         let captured = Arc::new(Mutex::new(Captured::default()));
-        let subscriber = tracing_subscriber::registry().with(CaptureLayer(captured.clone()));
+        let subscriber = tracing_subscriber::registry()
+            .with(LevelFilter::TRACE)
+            .with(CaptureLayer(captured.clone()));
         tracing::subscriber::with_default(subscriber, body);
         let guard = captured.lock().unwrap();
         guard.fields.clone()
@@ -948,6 +951,7 @@ mod trace_tests {
             let mut make = RedactingMakeSpan;
             let request = sensitive_request();
             let span = make.make_span(&request);
+            let _entered = span.enter();
             let response = Response::builder().status(503).body(()).unwrap();
             RedactingOnResponse.on_response(&response, Duration::from_millis(42), &span);
         });
@@ -1201,7 +1205,7 @@ mod apply_middleware_tests {
         };
         limiter_cfg.block_ip = vec![IpNet::from_str("203.0.113.0/24").unwrap()];
         let detector = Detector::new(limiter_cfg, String::new());
-        let limiter = zoeken_botdetect::layer(Arc::new(detector));
+        let limiter = crate::limiter::layer(Arc::new(detector));
 
         let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
         request
@@ -1224,7 +1228,7 @@ mod apply_middleware_tests {
             ..LimiterConfig::default()
         };
         let detector = Detector::new(limiter_cfg, String::new());
-        let limiter = zoeken_botdetect::layer(Arc::new(detector));
+        let limiter = crate::limiter::layer(Arc::new(detector));
 
         let mut request = Request::builder()
             .uri("/")

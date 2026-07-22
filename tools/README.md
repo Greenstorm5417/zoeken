@@ -17,4 +17,5 @@ uv run --no-project --python 3.13 tools/sync_versions.py --dry-run
 ```
 
 `fetch_tracker_patterns.py` writes `zoeken/zoeken-data/data/tracker_patterns.json`
-(ClearURLs snapshot). Not run on server boot — refresh manually, then rebuild.
+(ClearURLs snapshot for the SPA). Not run on boot — refresh manually, then
+`cd zoeken-client && bun run sync-data` (also runs as part of `bun run build`).

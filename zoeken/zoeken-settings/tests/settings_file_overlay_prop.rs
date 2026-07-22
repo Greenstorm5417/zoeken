@@ -24,7 +24,6 @@ struct Overrides {
     image_proxy: Option<bool>,
     secret_key: Option<String>,
     default_theme: Option<String>,
-    center_alignment: Option<bool>,
     results_on_new_tab: Option<bool>,
     request_timeout: Option<f64>,
     pool_connections: Option<u32>,
@@ -63,7 +62,6 @@ fn overrides_strategy() -> impl Strategy<Value = Overrides> {
         (
             proptest::option::of(safe_string()),
             proptest::option::of(any::<bool>()),
-            proptest::option::of(any::<bool>()),
             proptest::option::of(finite_f64()),
             proptest::option::of(0u32..=100_000),
             proptest::option::of(0u32..=100_000),
@@ -84,7 +82,6 @@ fn overrides_strategy() -> impl Strategy<Value = Overrides> {
                 (bind_address, limiter, public_instance, image_proxy, secret_key),
                 (
                     default_theme,
-                    center_alignment,
                     results_on_new_tab,
                     request_timeout,
                     pool_connections,
@@ -105,7 +102,6 @@ fn overrides_strategy() -> impl Strategy<Value = Overrides> {
                 image_proxy,
                 secret_key,
                 default_theme,
-                center_alignment,
                 results_on_new_tab,
                 request_timeout,
                 pool_connections,
@@ -170,9 +166,6 @@ fn build_file_yaml(ov: &Overrides) -> String {
 
     let mut ui = Mapping::new();
     put(&mut ui, "default_theme", &ov.default_theme, |v| str_val(v));
-    put(&mut ui, "center_alignment", &ov.center_alignment, |v| {
-        bool_val(*v)
-    });
     put(&mut ui, "results_on_new_tab", &ov.results_on_new_tab, |v| {
         bool_val(*v)
     });
@@ -283,10 +276,6 @@ proptest! {
         prop_assert_eq!(
             &merged.ui.default_theme,
             ov.default_theme.as_ref().unwrap_or(&defaults.ui.default_theme)
-        );
-        prop_assert_eq!(
-            merged.ui.center_alignment,
-            ov.center_alignment.unwrap_or(defaults.ui.center_alignment)
         );
         prop_assert_eq!(
             merged.ui.results_on_new_tab,

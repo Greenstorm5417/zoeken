@@ -41,9 +41,6 @@ brand:
   issue_url: ""
   # Example: "https://github.com/example/zoeken#readme"
   docs_url: ""
-  public_instances: ""
-  wiki_url: null
-  new_issue_url: ""
   custom:
     links: {}
     # links:
@@ -70,6 +67,11 @@ search:
   languages: []
   ban_time_on_fail: 5.0
   max_ban_time_on_fail: 120.0
+  # replace (default): non-empty engines: is the full registry.
+  # merge: overlay engines: onto the built-in catalog by id.
+  # Empty engines: always selects the built-in catalog.
+  engine_list_mode: replace
+  # Circuit cooldown policy (sole engine-health gate). DDG captcha → no circuit.
   suspended_times:
     SearxEngineAccessDenied: 86400.0
     SearxEngineCaptcha: 86400.0
@@ -103,6 +105,8 @@ server:
   default_http_headers: {}
   # default_http_headers:
   #   X-Robots-Tag: "noindex, nofollow"
+  # Skip SPA index.html boot check (also APP_DISABLE_UI=1).
+  disable_ui: false
 
 deployment:
   # trace, debug, info, warn, or error
@@ -121,7 +125,6 @@ ui:
   theme_args:
     # auto, light, dark, or black
     simple_style: "auto"
-  center_alignment: false
   results_on_new_tab: false
   query_in_title: false
   # Empty by default (no "archive" link on results). Set to a Wayback
@@ -137,7 +140,7 @@ outgoing:
   useragent_suffix: ""
   request_timeout: 3.0
   enable_http2: true
-  # true, false, or a CA bundle path
+  # true only — verify: false and custom CA paths are rejected at boot
   verify: true
   max_request_timeout: null
   pool_connections: 100
@@ -163,7 +166,8 @@ outgoing:
   #   example:
   #     request_timeout: null
   #     enable_http2: null
-  #     verify: null
+  #     # verify must stay true if set
+  #     verify: true
   #     max_request_timeout: null
   #     pool_connections: null
   #     pool_maxsize: null
@@ -177,8 +181,10 @@ outgoing:
   #     extra_proxy_timeout: null
   #     network: null
 
-# An empty list selects the built-in engine catalog. A non-empty entry accepts
-# every typed field below plus engine-specific flattened keys.
+# Engine catalog. Empty list → built-in catalog.
+# Non-empty + search.engine_list_mode=replace (default) → ONLY these engines.
+# Non-empty + search.engine_list_mode=merge → overlay onto built-ins by id.
+# A non-empty entry accepts every typed field below plus engine-specific keys.
 engines: []
 # engines:
 #   - name: "example"
@@ -194,16 +200,12 @@ engines: []
 #     # Engine-specific keys include base_url, api_key, and generic parser
 #     # selectors documented by that engine.
 
-# Keys are plugin ids. Entries accept active plus plugin-specific flattened keys.
+# Keys are preference ids for SPA client-features (see docs/client-features.md).
+# The server does not execute plugins; entries only set default enabled state.
 plugins: {}
 # plugins:
 #   calculator:
 #     active: null
-
-lua_plugins:
-  enabled: true
-  directory: null
-  order: []
 
 categories_as_tabs:
   files: {}
