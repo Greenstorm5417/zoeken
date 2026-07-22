@@ -1,125 +1,60 @@
-//! Privacy-preserving, bounded in-process caches for outbound engine responses.
+//! Privacy-preserving, bounded in-process cache for outbound engine responses.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use zoeken_engine_core::{EngineResponse, SearchQueryView};
-use zoeken_network::NetworkRequest;
+use zoeken_network::{FlightCache, NetworkRequest};
 
-pub(crate) struct CachedResponse {
-    at: Instant,
-    ttl: Duration,
-    bytes: usize,
-    response: EngineResponse,
+fn response_weight(response: &EngineResponse) -> usize {
+    response.body.len()
+        + response.url.len()
+        + response
+            .headers
+            .iter()
+            .map(|(name, value)| name.len() + value.len())
+            .sum::<usize>()
 }
 
 /// Keys are opaque HMAC digests; raw queries, bodies, and responses never
-/// enter persistent storage.
+/// enter persistent storage. Thin wrapper over the shared [`FlightCache`]
+/// (architecture-cleanup Phase 2) picking a per-entry TTL by response kind.
 pub(crate) struct ResponseCache {
-    pub(crate) entries: Mutex<HashMap<String, CachedResponse>>,
-    flights: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    pub(crate) total_bytes: Mutex<usize>,
+    cache: FlightCache<String, EngineResponse>,
     pub(crate) hmac_key: [u8; 32],
     html_ttl: Duration,
     structured_ttl: Duration,
-    max_bytes: usize,
 }
 
 impl ResponseCache {
     pub(crate) fn new(html_ttl: Duration, structured_ttl: Duration, max_bytes: usize) -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
-            flights: Mutex::new(HashMap::new()),
-            total_bytes: Mutex::new(0),
+            cache: FlightCache::new(max_bytes.max(1), response_weight),
             hmac_key: rand::random(),
             html_ttl,
             structured_ttl,
-            max_bytes: max_bytes.max(1),
         }
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<EngineResponse> {
-        let mut entries = self.entries.lock().ok()?;
-        let entry = entries.get(key)?;
-        if entry.at.elapsed() < entry.ttl {
-            return Some(entry.response.clone());
-        }
-        let expired = entries.remove(key)?;
-        if let Ok(mut total) = self.total_bytes.lock() {
-            *total = total.saturating_sub(expired.bytes);
-        }
-        None
+        self.cache.get(&key.to_string())
     }
 
     pub(crate) fn put(&self, key: String, response: EngineResponse, structured: bool) {
-        let bytes = response.body.len()
-            + response.url.len()
-            + response
-                .headers
-                .iter()
-                .map(|(name, value)| name.len() + value.len())
-                .sum::<usize>();
-        if bytes > self.max_bytes {
-            return;
-        }
-        let Ok(mut entries) = self.entries.lock() else {
-            return;
+        let ttl = if structured {
+            self.structured_ttl
+        } else {
+            self.html_ttl
         };
-        let Ok(mut total) = self.total_bytes.lock() else {
-            return;
-        };
-        entries.retain(|_, entry| {
-            let keep = entry.at.elapsed() < entry.ttl;
-            if !keep {
-                *total = total.saturating_sub(entry.bytes);
-            }
-            keep
-        });
-        while total.saturating_add(bytes) > self.max_bytes {
-            let Some(oldest) = entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.at)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            if let Some(removed) = entries.remove(&oldest) {
-                *total = total.saturating_sub(removed.bytes);
-            }
-        }
-        if let Some(previous) = entries.insert(
-            key,
-            CachedResponse {
-                at: Instant::now(),
-                ttl: if structured {
-                    self.structured_ttl
-                } else {
-                    self.html_ttl
-                },
-                bytes,
-                response,
-            },
-        ) {
-            *total = total.saturating_sub(previous.bytes);
-        }
-        *total = total.saturating_add(bytes);
+        self.cache.put(key, response, ttl);
     }
 
     pub(crate) fn flight(&self, key: &str) -> Option<Arc<tokio::sync::Mutex<()>>> {
-        let mut flights = self.flights.lock().ok()?;
-        Some(
-            flights
-                .entry(key.to_string())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone(),
-        )
+        self.cache.flight(&key.to_string())
     }
 
     pub(crate) fn finish_flight(&self, key: &str) {
-        if let Ok(mut flights) = self.flights.lock() {
-            flights.remove(key);
-        }
+        self.cache.finish_flight(&key.to_string());
     }
 }
 

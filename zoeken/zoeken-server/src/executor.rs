@@ -535,8 +535,10 @@ mod tests {
                 false,
             );
         }
-        assert!(*cache.total_bytes.lock().unwrap() <= 24);
-        assert!(cache.entries.lock().unwrap().len() <= 2);
+        // Only room for ~2 entries at 12 bytes each within a 24 byte budget;
+        // the oldest keys must have been evicted to make room for the newest.
+        assert!(cache.get("k0").is_none());
+        assert!(cache.get("k3").is_some());
     }
 
     #[tokio::test]

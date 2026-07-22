@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use zoeken_network::{DEFAULT_NETWORK, NetworkManager, NetworkRequest};
+use zoeken_network::{DEFAULT_NETWORK, FlightCache, NetworkManager, NetworkRequest};
 
 use backends::{
     BaiduBackend, BingBackend, DbpediaBackend, MwmblBackend, NaverBackend, PrivacywallBackend,
@@ -83,23 +83,18 @@ pub trait AutocompleteBackend: Send + Sync {
     fn suggest<'a>(&'a self, query: &'a str, locale: &'a str) -> SuggestFuture<'a>;
 }
 
-struct CacheEntry {
-    at: std::time::Instant,
-    suggestions: Vec<Suggestion>,
-}
-
 /// The autocomplete dispatch point: holds a backend and timeout, returning
 /// empty lists on error/timeout. Results are cached in memory for
 /// [`CACHE_TTL`] so repeated prefixes (backspacing, retyping) skip the
-/// upstream round-trip entirely.
+/// upstream round-trip entirely. Cache + singleflight is the shared
+/// [`FlightCache`] (architecture-cleanup Phase 2), weighted as one entry
+/// each so `cache_capacity` bounds entry count.
 #[derive(Clone)]
 pub struct AutocompleteService {
     backend: Option<Arc<dyn AutocompleteBackend>>,
     timeout: Duration,
-    cache: Arc<std::sync::Mutex<std::collections::HashMap<String, CacheEntry>>>,
-    flights: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    cache: Arc<FlightCache<String, Vec<Suggestion>>>,
     cache_ttl: Duration,
-    cache_capacity: usize,
     hmac_key: Arc<[u8; 32]>,
 }
 
@@ -109,10 +104,8 @@ impl AutocompleteService {
         Self {
             backend: None,
             timeout: DEFAULT_AUTOCOMPLETE_TIMEOUT,
-            cache: Arc::default(),
-            flights: Arc::default(),
+            cache: Arc::new(FlightCache::new(2048, |_: &Vec<Suggestion>| 1)),
             cache_ttl: Duration::from_secs(300),
-            cache_capacity: 2048,
             hmac_key: Arc::new(rand::random()),
         }
     }
@@ -122,10 +115,8 @@ impl AutocompleteService {
         Self {
             backend: Some(backend),
             timeout: DEFAULT_AUTOCOMPLETE_TIMEOUT,
-            cache: Arc::default(),
-            flights: Arc::default(),
+            cache: Arc::new(FlightCache::new(2048, |_: &Vec<Suggestion>| 1)),
             cache_ttl: Duration::from_secs(300),
-            cache_capacity: 2048,
             hmac_key: Arc::new(rand::random()),
         }
     }
@@ -141,7 +132,7 @@ impl AutocompleteService {
     #[must_use]
     pub fn with_cache(mut self, ttl: Duration, max_entries: usize) -> Self {
         self.cache_ttl = ttl;
-        self.cache_capacity = max_entries.max(1);
+        self.cache = Arc::new(FlightCache::new(max_entries.max(1), |_: &Vec<Suggestion>| 1));
         self
     }
 
@@ -163,67 +154,35 @@ impl AutocompleteService {
         };
 
         let key = autocomplete_key(&self.hmac_key[..], backend.name(), query, locale);
-        if let Ok(cache) = self.cache.lock()
-            && let Some(entry) = cache.get(&key)
-            && entry.at.elapsed() < self.cache_ttl
-        {
+        if let Some(suggestions) = self.cache.get(&key) {
             metrics::counter!("autocomplete_cache_total", "outcome" => "hit").increment(1);
-            return entry.suggestions.clone();
+            return suggestions;
         }
 
-        let flight = {
-            let Ok(mut flights) = self.flights.lock() else {
-                return Vec::new();
-            };
-            flights
-                .entry(key.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
+        let Some(flight) = self.cache.flight(&key) else {
+            return Vec::new();
         };
         let _guard = flight.lock().await;
 
         // The leader populates the cache while followers wait on the key lock.
-        if let Ok(cache) = self.cache.lock()
-            && let Some(entry) = cache.get(&key)
-            && entry.at.elapsed() < self.cache_ttl
-        {
+        if let Some(suggestions) = self.cache.get(&key) {
             metrics::counter!("autocomplete_singleflight_total", "outcome" => "shared")
                 .increment(1);
-            return entry.suggestions.clone();
+            return suggestions;
         }
 
         let suggestions =
             match tokio::time::timeout(self.timeout, backend.suggest(query, locale)).await {
                 Ok(Ok(suggestions)) => suggestions,
                 Ok(Err(_)) | Err(_) => {
-                    if let Ok(mut flights) = self.flights.lock() {
-                        flights.remove(&key);
-                    }
+                    self.cache.finish_flight(&key);
                     return Vec::new();
                 }
             };
 
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.retain(|_, entry| entry.at.elapsed() < self.cache_ttl);
-            if cache.len() >= self.cache_capacity
-                && let Some(oldest) = cache
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.at)
-                    .map(|(key, _)| key.clone())
-            {
-                cache.remove(&oldest);
-            }
-            cache.insert(
-                key.clone(),
-                CacheEntry {
-                    at: std::time::Instant::now(),
-                    suggestions: suggestions.clone(),
-                },
-            );
-        }
-        if let Ok(mut flights) = self.flights.lock() {
-            flights.remove(&key);
-        }
+        self.cache
+            .put(key.clone(), suggestions.clone(), self.cache_ttl);
+        self.cache.finish_flight(&key);
         suggestions
     }
 }
