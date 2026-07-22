@@ -700,12 +700,21 @@ async fn run_search(
             &plugin_ctx,
         )
         .await;
-    tracker_cleanup::strip_trackers(&mut container, &state.data.tracker_patterns);
-    ahmia_filter::filter_blacklisted_onions(
-        &mut container,
-        &state.data.ahmia_blacklist,
-        state.settings.outgoing.using_tor_proxy,
-    );
+    if resolved_prefs
+        .plugins
+        .get("tracker_url_remover")
+        .copied()
+        .unwrap_or(true)
+    {
+        tracker_cleanup::strip_trackers(&mut container, &state.data.tracker_patterns);
+    }
+    if resolved_prefs.plugins.get("ahmia_filter").copied().unwrap_or(true) {
+        ahmia_filter::filter_blacklisted_onions(
+            &mut container,
+            &state.data.ahmia_blacklist,
+            state.settings.outgoing.using_tor_proxy,
+        );
+    }
 
     if query.redirect.is_some()
         && let Some(target) = container.results.iter().find_map(|result| match result {

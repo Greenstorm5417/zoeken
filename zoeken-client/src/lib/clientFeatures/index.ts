@@ -3,7 +3,7 @@ import type { Config, SearchResult } from "../api";
 import { applyHostnames, sortByPriority } from "./hostnames";
 import { applyDoiRewrite } from "./doiRewrite";
 
-function pluginEnabled(config: Config | undefined, id: string): boolean {
+export function pluginEnabled(config: Config | undefined, id: string): boolean {
 	return Boolean(config?.plugins?.find((p) => p.id === id)?.enabled);
 }
 

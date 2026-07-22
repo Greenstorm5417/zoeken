@@ -1815,7 +1815,6 @@ fn strip_doi_suffixes(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zoeken_data::HostnamesRules;
 
     use crate::SimpleResultContainer;
 
@@ -2138,50 +2137,7 @@ mod tests {
             LuaRuntimeConfig::default(),
         );
         let ids: Vec<_> = plugins.iter().map(|plugin| plugin.id()).collect();
-        assert_eq!(
-            ids,
-            vec![
-                "calculator",
-                "unit_converter",
-                "self_info",
-                "time_zone",
-                "tracker_url_remover",
-                "hostnames",
-                "oa_doi_rewrite",
-                "ahmia_filter",
-                "tor_check",
-                "infiniteScroll",
-            ]
-        );
-    }
-
-    #[test]
-    fn builtin_answerers_run_from_lua() {
-        let data = zoeken_data::DataBundle::default();
-        let calc = builtin("calculator", data.clone());
-        let answers = calc.on_pre_search_answers(&query("2 + 2"), &PluginCtx::all_enabled());
-        assert_eq!(answers[0].answer, "4");
-
-        let ctx = PluginCtx::all_enabled()
-            .with_client_ip("192.0.2.5")
-            .with_user_agent("Mozilla/5.0");
-        let self_info = builtin("self_info", data);
-        let answers = self_info.on_pre_search_answers(&query("ip"), &ctx);
-        assert_eq!(answers[0].answer, "Your IP is: 192.0.2.5");
-        match &answers[0].interactive {
-            Some(zoeken_results::InteractiveAnswer::SelfInfo { kind, value }) => {
-                assert_eq!(kind, "ip");
-                assert_eq!(value, "192.0.2.5");
-            }
-            other => panic!("expected SelfInfo interactive, got {other:?}"),
-        }
-
-        let answers = self_info.on_pre_search_answers(&query("whats my ip"), &ctx);
-        assert_eq!(answers[0].answer, "Your IP is: 192.0.2.5");
-        assert!(matches!(
-            &answers[0].interactive,
-            Some(zoeken_results::InteractiveAnswer::SelfInfo { kind, .. }) if kind == "ip"
-        ));
+        assert_eq!(ids, vec!["unit_converter", "infiniteScroll"]);
     }
 
     #[test]
@@ -2230,103 +2186,6 @@ mod tests {
     }
 
     #[test]
-    fn builtin_result_plugins_mutate_and_filter_results() {
-        let data = zoeken_data::load_embedded_bundle().expect("embedded data");
-        let tracker = builtin("tracker_url_remover", data);
-        let mut result = main("https://example.com/a?utm_source=x&q=rust", "Title");
-        tracker.on_result(
-            &mut result,
-            &SearchQuery::default(),
-            &PluginCtx::all_enabled(),
-        );
-        assert!(matches!(result, Result_::Main(ref r) if r.url == "https://example.com/a?q=rust"));
-
-        let tor = builtin("tor_check", zoeken_data::DataBundle::default());
-        let answers = tor.on_pre_search_answers(&query("not tor"), &PluginCtx::all_enabled());
-        assert!(answers.is_empty());
-    }
-
-    #[test]
-    fn builtin_doi_and_hostnames_use_runtime_plugin_data() {
-        let data = zoeken_data::DataBundle {
-            plugin_data: zoeken_data::PluginData {
-                doi_resolver: Some("https://oa.example/".to_string()),
-                hostnames: HostnamesRules {
-                    replace: vec![(
-                        "(.*\\.)?youtube\\.com$".to_string(),
-                        "invidious.example.com".to_string(),
-                    )],
-                    remove: vec!["(.*\\.)?facebook\\.com$".to_string()],
-                    high_priority: vec!["(.*\\.)?wikipedia\\.org$".to_string()],
-                    low_priority: vec!["(.*\\.)?google\\.com$".to_string()],
-                },
-                using_tor_proxy: false,
-            },
-            ..zoeken_data::DataBundle::default()
-        };
-        let doi = builtin("oa_doi_rewrite", data.clone());
-        let mut result = main("https://publisher.example/10.1000/xyz123.pdf", "Paper");
-        doi.on_result(
-            &mut result,
-            &SearchQuery::default(),
-            &PluginCtx::all_enabled(),
-        );
-        assert!(
-            matches!(result, Result_::Main(ref r) if r.url == "https://oa.example/10.1000/xyz123")
-        );
-
-        let hostnames = builtin("hostnames", data);
-        let mut result = main("https://www.youtube.com/watch?v=abc", "Video");
-        assert!(hostnames.on_result(
-            &mut result,
-            &SearchQuery::default(),
-            &PluginCtx::all_enabled()
-        ));
-        assert!(
-            matches!(result, Result_::Main(ref r) if r.url == "https://invidious.example.com/watch?v=abc")
-        );
-
-        let mut result = main("https://m.facebook.com/page", "Drop");
-        assert!(!hostnames.on_result(
-            &mut result,
-            &SearchQuery::default(),
-            &PluginCtx::all_enabled()
-        ));
-
-        let mut result = main("https://www.google.com/search?q=x", "Low");
-        assert!(hostnames.on_result(
-            &mut result,
-            &SearchQuery::default(),
-            &PluginCtx::all_enabled()
-        ));
-        assert!(matches!(result, Result_::Main(ref r) if r.priority == "low"));
-
-        let mut result = main("https://en.wikipedia.org/wiki/Rust", "High");
-        assert!(hostnames.on_result(
-            &mut result,
-            &SearchQuery::default(),
-            &PluginCtx::all_enabled()
-        ));
-        assert!(matches!(result, Result_::Main(ref r) if r.priority == "high"));
-    }
-
-    #[test]
-    fn builtin_ahmia_filter_removes_blocklisted_onion() {
-        let mut data = zoeken_data::DataBundle::default();
-        data.plugin_data.using_tor_proxy = true;
-        data.ahmia_blacklist
-            .insert(hash_digest("md5", "blockedxxxxxxxxx.onion").unwrap());
-        let plugin = builtin("ahmia_filter", data);
-        let query = SearchQuery::default();
-        let mut blocked = main("http://blockedxxxxxxxxx.onion/page", "Blocked");
-        let mut safe = main("http://safeonionxxxxxx.onion/page", "Safe");
-        let mut regular = main("https://example.com/", "Example");
-        assert!(!plugin.on_result(&mut blocked, &query, &PluginCtx::all_enabled()));
-        assert!(plugin.on_result(&mut safe, &query, &PluginCtx::all_enabled()));
-        assert!(plugin.on_result(&mut regular, &query, &PluginCtx::all_enabled()));
-    }
-
-    #[test]
     fn instruction_budget_isolates_runaway_hook() {
         let plugin = LuaPlugin::from_source(
             "loop",
@@ -2368,25 +2227,5 @@ mod tests {
         assert!(answers.is_empty());
         assert_eq!(unit.metrics().hook_failures.load(Ordering::Relaxed), 0);
         assert_eq!(unit.metrics().timeouts.load(Ordering::Relaxed), 0);
-
-        let doi = builtin("oa_doi_rewrite", (*data).clone());
-        let tracker = builtin("tracker_url_remover", (*data).clone());
-        let search_query = SearchQuery::default();
-        for i in 0..40 {
-            let mut result = main(
-                &format!("https://example.com/path/{i}?utm_source=x&q=rust"),
-                "Title",
-            );
-            assert!(doi.on_result(&mut result, &search_query, &PluginCtx::all_enabled()));
-            assert!(tracker.on_result(&mut result, &search_query, &PluginCtx::all_enabled()));
-            assert!(
-                matches!(result, Result_::Main(ref r) if !r.url.contains("utm_source")),
-                "tracker should strip utm params"
-            );
-        }
-        assert_eq!(doi.metrics().hook_failures.load(Ordering::Relaxed), 0);
-        assert_eq!(doi.metrics().timeouts.load(Ordering::Relaxed), 0);
-        assert_eq!(tracker.metrics().hook_failures.load(Ordering::Relaxed), 0);
-        assert_eq!(tracker.metrics().timeouts.load(Ordering::Relaxed), 0);
     }
 }

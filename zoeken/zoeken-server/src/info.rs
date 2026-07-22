@@ -746,7 +746,106 @@ fn plugin_infos(state: &AppState) -> Vec<PluginInfo> {
             before: info.before,
             capabilities: info.capabilities,
         })
+        .chain(client_feature_plugin_infos())
         .collect()
+}
+
+/// Former Lua plugins now implemented as SPA client-features or built-in
+/// Rust filters have no Lua registration anymore, but still need to appear
+/// in `/config` so `/preferences` toggles and client feature-flag gating
+/// keep working against the same plugin ids.
+fn client_feature_plugin_infos() -> impl Iterator<Item = PluginInfo> {
+    fn info(
+        id: &str,
+        name: &str,
+        description: &str,
+        kind: &str,
+        preference_section: &str,
+        default_enabled: bool,
+        keywords: &[&str],
+    ) -> PluginInfo {
+        PluginInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            enabled: default_enabled,
+            default_enabled,
+            kind: kind.to_string(),
+            keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            preference_section: preference_section.to_string(),
+            version: "1".to_string(),
+            api_version: 1,
+            after: Vec::new(),
+            before: Vec::new(),
+            capabilities: Vec::new(),
+        }
+    }
+    [
+        info(
+            "calculator",
+            "Calculator",
+            "Parses and solves mathematical expressions.",
+            "answerer",
+            "query",
+            true,
+            &[],
+        ),
+        info(
+            "time_zone",
+            "Timezones plugin",
+            "Display the current time on different time zones.",
+            "answerer",
+            "query",
+            true,
+            &["time", "timezone", "now", "clock", "timezones"],
+        ),
+        info(
+            "self_info",
+            "Self Information",
+            "Displays your IP or user agent for queries like \"whats my ip\" / \"user-agent\".",
+            "answerer",
+            "query",
+            true,
+            &["ip", "user-agent", "user"],
+        ),
+        info(
+            "hostnames",
+            "Hostnames plugin",
+            "Rewrite hostnames and remove or prioritize results based on the hostname",
+            "result_plugin",
+            "general",
+            true,
+            &[],
+        ),
+        info(
+            "oa_doi_rewrite",
+            "Open Access DOI rewrite",
+            "Avoid paywalls by redirecting to open-access versions of publications when available",
+            "result_plugin",
+            "general",
+            false,
+            &[],
+        ),
+        info(
+            "tracker_url_remover",
+            "Tracker URL remover",
+            "Remove trackers arguments from the returned URL",
+            "result_plugin",
+            "privacy",
+            true,
+            &[],
+        ),
+        info(
+            "ahmia_filter",
+            "Ahmia blacklist",
+            "Filter out onion results that appear in Ahmia's blacklist.",
+            "result_plugin",
+            "general",
+            true,
+            &[],
+        ),
+    ]
+    .into_iter()
 }
 
 fn xml_escape(text: &str) -> String {

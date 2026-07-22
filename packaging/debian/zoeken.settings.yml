@@ -248,8 +248,6 @@ plugins:
     active: true
   time_zone:
     active: true
-  tor_check:
-    active: true
   tracker_url_remover:
     active: true
   unit_converter:

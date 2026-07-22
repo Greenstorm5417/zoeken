@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Settings2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { InstantAnswerCard } from "#/components/answers/InstantAnswerCard";
 import { ImageLightbox } from "#/components/ImageLightbox";
 import { coordsFromResult, MapCanvas } from "#/components/MapCanvas";
@@ -15,7 +15,10 @@ import {
 	type SearchResult,
 	search,
 } from "#/lib/api";
-import { applyClientFeatures } from "#/lib/clientFeatures";
+import { applyClientFeatures, pluginEnabled } from "#/lib/clientFeatures";
+import { computeCalculatorAnswer } from "#/lib/clientFeatures/calculator";
+import { computeSelfInfoAnswer } from "#/lib/clientFeatures/selfInfo";
+import { computeTimeZoneAnswer } from "#/lib/clientFeatures/timeZone";
 import { pickDidYouMean } from "#/lib/didYouMean";
 import { stringsFor } from "#/lib/i18n";
 import {
@@ -480,6 +483,22 @@ function SearchPage() {
 		return applyClientFeatures(merged, config);
 	})();
 
+	// Calculator/time/self-info answers are computed locally, no round trip.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: navigator.userAgent is stable per session
+	const localAnswers = useMemo(() => {
+		const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+		return [
+			pluginEnabled(config, "calculator")
+				? computeCalculatorAnswer(q, language ?? "", pageno)
+				: null,
+			pluginEnabled(config, "time_zone") ? computeTimeZoneAnswer(q, pageno) : null,
+			pluginEnabled(config, "self_info")
+				? computeSelfInfoAnswer(q, pageno, config?.client_ip ?? null, ua)
+				: null,
+		].filter((answer) => answer !== null);
+	}, [q, language, pageno, config]);
+	const answers = [...localAnswers, ...(firstPage?.answers ?? [])];
+
 	const [lightbox, setLightbox] = useState<SearchResult | null>(null);
 	const [elapsedSec, setElapsedSec] = useState<number | null>(null);
 	const [clientCorrection, setClientCorrection] = useState<string | null>(null);
@@ -927,12 +946,12 @@ function SearchPage() {
 
 					<div className="flex flex-col gap-10 lg:flex-row lg:items-start lg:gap-12">
 						<div className="min-w-0 flex-1">
-							{firstPage.answers.map((a) => (
+							{answers.map((a) => (
 								<InstantAnswerCard key={a.answer} answer={a} />
 							))}
 
 							{results.length === 0 &&
-							firstPage.answers.length === 0 &&
+							answers.length === 0 &&
 							firstPage.infoboxes.length === 0 ? (
 								<div className="max-w-[40rem] rounded-2xl border border-line bg-surface-raised px-5 py-4">
 									<p className="font-medium text-ink">

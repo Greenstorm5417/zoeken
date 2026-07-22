@@ -457,17 +457,26 @@ mod tests {
     async fn run_folds_plugin_answers_and_runs_post_search() {
         let registry =
             EngineRegistry::from_engines([RegisteredEngine::new(stub("alpha", &["general"]))]);
-        let plugin_dir = workspace_root()
-            .join("zoeken")
-            .join("zoeken-plugins")
-            .join("plugins");
-        let plugins = zoeken_plugins::PluginRegistry::from_plugins(
-            zoeken_plugins::lua::load_plugins_from_dir(
-                &plugin_dir,
+        let plugin: std::sync::Arc<dyn zoeken_plugins::Plugin> = std::sync::Arc::new(
+            zoeken_plugins::lua::LuaPlugin::from_source(
+                "test_answerer",
+                r#"
+                return {
+                  id = "test_answerer",
+                  api_version = 1,
+                  kind = "answerer",
+                  capabilities = {"answers"},
+                  pre_search_answers = function(query, ctx)
+                    return { answer = "4", engine = "test_answerer" }
+                  end,
+                }
+                "#,
                 Arc::new(zoeken_data::DataBundle::default()),
                 zoeken_plugins::lua::LuaRuntimeConfig::default(),
-            ),
+            )
+            .expect("plugin loads"),
         );
+        let plugins = zoeken_plugins::PluginRegistry::from_plugins([plugin]);
         let search = Search::new(
             registry,
             Arc::new(ImmediateExecutor),
@@ -475,21 +484,12 @@ mod tests {
         )
         .with_plugins(plugins);
 
-        let mut query = search_query();
-        query.query = "2 + 2".to_string();
-
-        let ctx = zoeken_plugins::PluginCtx::new(zoeken_plugins::PluginGating {
-            globally_enabled: true,
-            per_plugin: [("calculator".to_string(), true)].into_iter().collect(),
-            default_enabled: true,
-        });
         let container = search
-            .run_with_plugin_ctx(
-                &query,
+            .run(
+                &search_query(),
                 &AllEnginesEnabled,
                 &HashSet::new(),
                 &NoopRecorder,
-                &ctx,
             )
             .await;
 
@@ -520,21 +520,26 @@ mod tests {
 
         let registry =
             EngineRegistry::from_engines([RegisteredEngine::new(stub("alpha", &["general"]))]);
-        let mut data = zoeken_data::DataBundle::default();
-        data.plugin_data.using_tor_proxy = true;
-        data.ahmia_blacklist
-            .insert("e1cce76deeda180a4f77b14fde215aa1".to_string());
-        let plugin_dir = workspace_root()
-            .join("zoeken")
-            .join("zoeken-plugins")
-            .join("plugins");
-        let plugins = zoeken_plugins::PluginRegistry::from_plugins(
-            zoeken_plugins::lua::load_plugins_from_dir(
-                &plugin_dir,
-                Arc::new(data),
+        let plugin: std::sync::Arc<dyn zoeken_plugins::Plugin> = std::sync::Arc::new(
+            zoeken_plugins::lua::LuaPlugin::from_source(
+                "onion_filter",
+                r#"
+                return {
+                  id = "onion_filter",
+                  api_version = 1,
+                  kind = "result_plugin",
+                  capabilities = {"result"},
+                  on_result = function(result, query, ctx)
+                    return not string.find(result.url or "", "blockedonionxxxx%.onion")
+                  end,
+                }
+                "#,
+                Arc::new(zoeken_data::DataBundle::default()),
                 zoeken_plugins::lua::LuaRuntimeConfig::default(),
-            ),
+            )
+            .expect("plugin loads"),
         );
+        let plugins = zoeken_plugins::PluginRegistry::from_plugins([plugin]);
         let search = Search::new(registry, Arc::new(OnionExecutor), SearchConfig::default())
             .with_plugins(plugins);
 
@@ -549,14 +554,6 @@ mod tests {
 
         assert!(container.results.is_empty());
         assert_eq!(container.number_of_results, 0);
-    }
-
-    fn workspace_root() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root")
-            .to_path_buf()
     }
 
     #[tokio::test]
