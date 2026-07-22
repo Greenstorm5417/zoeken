@@ -1,401 +1,40 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Settings2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { InstantAnswerCard } from "#/components/answers/InstantAnswerCard";
 import { ImageLightbox } from "#/components/ImageLightbox";
+import { InfoboxCard } from "#/components/InfoboxCard";
 import { coordsFromResult, MapCanvas } from "#/components/MapCanvas";
-import { MapResult, specializedTemplate } from "#/components/ResultTemplates";
+import {
+	MapResult,
+	ResultItem,
+	specializedTemplate,
+} from "#/components/ResultTemplates";
 import { SearchForm } from "#/components/SearchForm";
 import { SelectMenu } from "#/components/SelectMenu";
-import {
-	ApiError,
-	autocomplete,
-	type Infobox,
-	type SearchResult,
-	search,
-} from "#/lib/api";
-import { applyClientFeatures, pluginEnabled } from "#/lib/clientFeatures";
-import { computeCalculatorAnswer } from "#/lib/clientFeatures/calculator";
-import { computeCryptoAnswer } from "#/lib/clientFeatures/crypto";
-import { computeDateTimeAnswer } from "#/lib/clientFeatures/dateTime";
-import { computeRandomAnswer } from "#/lib/clientFeatures/random";
-import { computeSelfInfoAnswer } from "#/lib/clientFeatures/selfInfo";
-import { computeStatisticsAnswer } from "#/lib/clientFeatures/statistics";
-import { computeTimeZoneAnswer } from "#/lib/clientFeatures/timeZone";
-import { computeUnitConverterAnswer } from "#/lib/clientFeatures/unitConverter";
+import { VideoCard } from "#/components/VideoCard";
+import { ApiError, autocomplete, type SearchResult, search } from "#/lib/api";
+import { applyClientFeatures } from "#/lib/clientFeatures";
 import { pickDidYouMean } from "#/lib/didYouMean";
 import { stringsFor } from "#/lib/i18n";
+import { parseSearchParams } from "#/lib/searchParams";
 import {
-	parseSearchParams,
-	type SearchRouteParams,
-	serializeSearchParams,
-} from "#/lib/searchParams";
+	DEFAULT_CATEGORIES,
+	correctionText,
+	engineNames,
+	formatEngineLabel,
+	pageNumbers,
+	searchLink,
+	suggestionText,
+} from "#/lib/searchDisplay";
+import { useLocalAnswers } from "#/lib/useLocalAnswers";
 import { useConfig } from "./__root";
 
 export const Route = createFileRoute("/search")({
 	validateSearch: parseSearchParams,
 	component: SearchPage,
 });
-
-/** Sandboxed click-to-play video card when `iframe_src` is present. */
-function VideoCard({
-	result,
-	newTab,
-}: {
-	result: SearchResult;
-	newTab?: boolean;
-}) {
-	const [playing, setPlaying] = useState(false);
-	const thumb = result.thumbnail || result.img_src;
-	const embed = result.iframe_src?.trim();
-
-	return (
-		<article className="overflow-hidden rounded-xl border border-line bg-surface-raised">
-			<div className="aspect-video bg-ink/5">
-				{playing && embed ? (
-					<iframe
-						src={embed}
-						title={result.title}
-						className="size-full border-0"
-						allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-						sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
-						allowFullScreen
-					/>
-				) : (
-					<button
-						type="button"
-						onClick={() => {
-							if (embed) setPlaying(true);
-							else window.open(result.url, newTab ? "_blank" : "_self");
-						}}
-						className="group relative block size-full"
-						aria-label={embed ? `Play ${result.title}` : result.title}
-					>
-						{thumb ? (
-							<img
-								src={thumb}
-								alt=""
-								className="size-full object-cover transition-transform duration-150 group-hover:scale-[1.01]"
-								loading="lazy"
-							/>
-						) : (
-							<div className="flex size-full items-center justify-center text-sm text-ink-subtle">
-								Video
-							</div>
-						)}
-						{embed ? (
-							<span className="absolute inset-0 flex items-center justify-center bg-black/25 text-white opacity-90 transition-opacity group-hover:opacity-100">
-								<span className="rounded-full bg-black/60 px-3 py-1.5 text-sm font-medium">
-									Play
-								</span>
-							</span>
-						) : null}
-					</button>
-				)}
-			</div>
-			<div className="p-3">
-				{embed && playing ? (
-					<p className="line-clamp-2 text-sm font-medium text-ink">
-						{result.title}
-					</p>
-				) : (
-					<a
-						data-result-link
-						href={result.url}
-						target={newTab ? "_blank" : undefined}
-						rel={newTab ? "noopener noreferrer" : undefined}
-						className="line-clamp-2 text-sm font-medium text-ink no-underline hover:text-accent"
-					>
-						{result.title}
-					</a>
-				)}
-				{result.content ? (
-					<p className="mt-1 line-clamp-2 text-xs text-ink-muted">
-						{result.content}
-					</p>
-				) : null}
-				{engineNames(result).length ? (
-					<p className="mt-1.5 truncate text-[0.65rem] text-ink-subtle">
-						{engineNames(result).map(formatEngineLabel).join(" · ")}
-					</p>
-				) : null}
-			</div>
-		</article>
-	);
-}
-
-/** Align with `categories_as_tabs` in default.config.yml when engines exist. */
-const DEFAULT_CATEGORIES = [
-	"general",
-	"images",
-	"videos",
-	"news",
-	"map",
-	"science",
-	"it",
-	"files",
-	"music",
-	"shopping",
-] as const;
-
-function suggestionText(s: string | { suggestion: string }) {
-	return typeof s === "string" ? s : s.suggestion;
-}
-
-function correctionText(c: string | { correction: string }) {
-	return typeof c === "string" ? c : c.correction;
-}
-
-function hostnameOf(url: string) {
-	try {
-		return new URL(url).hostname.replace(/^www\./, "");
-	} catch {
-		return url;
-	}
-}
-
-function pathOf(url: string) {
-	try {
-		const u = new URL(url);
-		const path = u.pathname.replace(/\/$/, "") || "";
-		return path === "/" ? "" : path;
-	} catch {
-		return "";
-	}
-}
-
-function engineNames(result: SearchResult): string[] {
-	const names =
-		result.engines && result.engines.length > 0
-			? result.engines
-			: result.engine
-				? [result.engine]
-				: [];
-	return [...new Set(names.filter(Boolean))];
-}
-
-function formatEngineLabel(name: string) {
-	return name.replace(/[_-]+/g, " ");
-}
-
-function wikidataId(id: string | null | undefined): string | null {
-	if (!id) return null;
-	const match = id.match(/\/(Q\d+)\s*$/i) || id.match(/^(Q\d+)$/i);
-	return match ? match[1].toUpperCase() : null;
-}
-
-function searchLink(
-	search: SearchRouteParams,
-	updates: Partial<SearchRouteParams>,
-) {
-	return serializeSearchParams({ ...search, ...updates });
-}
-
-/** Sliding window of page numbers (SearXNG-style): 1–10, then centered on current. */
-function pageNumbers(pageno: number): number[] {
-	const start = pageno > 5 ? pageno - 4 : 1;
-	return Array.from({ length: 10 }, (_, i) => start + i);
-}
-
-function ResultItem({
-	result,
-	newTab = false,
-	urlFormatting = "pretty",
-	cacheUrl = "",
-}: {
-	result: SearchResult;
-	newTab?: boolean;
-	urlFormatting?: string;
-	cacheUrl?: string;
-}) {
-	const host = hostnameOf(result.url);
-	const crumbs = pathOf(result.url)
-		.split("/")
-		.filter(Boolean)
-		.slice(0, 3)
-		.join(" > ");
-	const engines = engineNames(result);
-	const displayUrl =
-		urlFormatting === "full"
-			? result.url
-			: urlFormatting === "host"
-				? host
-				: `${host}${crumbs ? ` > ${crumbs}` : ""}`;
-
-	return (
-		<article className="max-w-[40rem]">
-			<a
-				data-result-link
-				href={result.url}
-				target={newTab ? "_blank" : undefined}
-				rel={newTab ? "noopener noreferrer" : undefined}
-				className="group block no-underline"
-			>
-				<div className="flex items-center gap-2.5">
-					{result.favicon ? (
-						<img
-							src={result.favicon}
-							alt=""
-							width={20}
-							height={20}
-							className="size-5 rounded-[5px] bg-surface-raised ring-1 ring-line/80"
-							loading="lazy"
-							onError={(event) => {
-								event.currentTarget.hidden = true;
-							}}
-						/>
-					) : null}
-					<div className="min-w-0">
-						<p className="truncate text-[0.875rem] leading-tight text-ink">
-							{host}
-						</p>
-						<p className="truncate text-[0.75rem] leading-tight text-ink-subtle">
-							{displayUrl}
-						</p>
-					</div>
-				</div>
-				<h2 className="mt-1.5 text-[1.25rem] leading-snug font-medium tracking-tight text-accent transition-colors group-hover:underline">
-					{result.title}
-				</h2>
-			</a>
-			{result.content ? (
-				<p className="mt-1.5 line-clamp-2 text-[0.9rem] leading-relaxed text-ink-muted">
-					{result.content}
-				</p>
-			) : null}
-			{engines.length > 0 || cacheUrl ? (
-				<p className="mt-1.5 text-[0.75rem] text-ink-subtle">
-					{engines.map(formatEngineLabel).join(" · ")}
-					{cacheUrl ? (
-						<>
-							{engines.length > 0 ? <span aria-hidden> · </span> : null}
-							<a
-								href={cacheUrl + encodeURIComponent(result.url)}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="text-ink-subtle underline decoration-line underline-offset-2 hover:text-accent"
-							>
-								archive
-							</a>
-						</>
-					) : null}
-				</p>
-			) : null}
-		</article>
-	);
-}
-
-function InfoboxCard({ box }: { box: Infobox }) {
-	const title = box.infobox || "Info";
-	const qid = wikidataId(box.id);
-	const source = box.engine ? formatEngineLabel(box.engine) : null;
-	const primaryUrl = box.urls?.[0]?.url ?? box.id ?? undefined;
-	const attributes = (box.attributes ?? []).filter(
-		(attr) => attr.label && (attr.value || attr.image?.src),
-	);
-	const topics = (box.related_topics ?? []).filter(Boolean);
-
-	return (
-		<article className="mb-4 overflow-hidden rounded-2xl border border-line bg-surface-raised">
-			{box.img_src ? (
-				<img
-					src={box.img_src}
-					alt=""
-					className="max-h-44 w-full object-cover"
-				/>
-			) : null}
-			<div className="p-4">
-				{source ? (
-					<p className="mb-1.5 text-[0.7rem] font-medium tracking-wide text-ink-subtle uppercase">
-						{source}
-					</p>
-				) : null}
-				<h3 className="text-base font-medium text-ink">
-					{primaryUrl ? (
-						<a
-							href={primaryUrl}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="text-ink no-underline hover:text-accent hover:underline"
-						>
-							{title}
-						</a>
-					) : (
-						title
-					)}
-				</h3>
-				{qid ? (
-					<p className="mt-1 font-mono text-xs text-ink-subtle">{qid}</p>
-				) : null}
-				{box.content ? (
-					<p className="mt-2 text-sm leading-relaxed text-ink-muted">
-						{box.content}
-					</p>
-				) : null}
-				{attributes.length > 0 ? (
-					<dl className="mt-3 space-y-2 border-t border-line pt-3">
-						{attributes.map((attr) => (
-							<div key={`${attr.label}:${attr.value ?? ""}`}>
-								<dt className="text-[0.7rem] font-medium tracking-wide text-ink-subtle uppercase">
-									{attr.label}
-								</dt>
-								{attr.image?.src ? (
-									<dd className="mt-1">
-										<img
-											src={attr.image.src}
-											alt={attr.image.alt || attr.label}
-											className="max-h-24 rounded-lg object-contain"
-										/>
-									</dd>
-								) : null}
-								{attr.value ? (
-									<dd className="mt-0.5 text-sm text-ink">{attr.value}</dd>
-								) : null}
-							</div>
-						))}
-					</dl>
-				) : null}
-				{topics.length > 0 ? (
-					<div className="mt-3 border-t border-line pt-3">
-						<p className="mb-1.5 text-[0.7rem] font-medium tracking-wide text-ink-subtle uppercase">
-							Related
-						</p>
-						<ul className="flex flex-wrap gap-1.5">
-							{topics.map((topic) => (
-								<li key={topic}>
-									<Link
-										to="/search"
-										search={{ q: topic }}
-										className="inline-block rounded-lg border border-line px-2 py-0.5 text-xs text-ink no-underline hover:border-accent hover:text-accent"
-									>
-										{topic}
-									</Link>
-								</li>
-							))}
-						</ul>
-					</div>
-				) : null}
-				{box.urls && box.urls.length > 0 ? (
-					<ul className="mt-3 flex flex-col gap-1">
-						{box.urls.map((link) => (
-							<li key={link.url}>
-								<a
-									href={link.url}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="text-sm text-accent hover:underline"
-								>
-									{link.title || "Source"}
-								</a>
-							</li>
-						))}
-					</ul>
-				) : null}
-			</div>
-		</article>
-	);
-}
 
 function SearchPage() {
 	const params = Route.useSearch();
@@ -488,27 +127,7 @@ function SearchPage() {
 		return applyClientFeatures(merged, config);
 	})();
 
-	// Calculator/time/self-info answers are computed locally, no round trip.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: navigator.userAgent is stable per session
-	const localAnswers = useMemo(() => {
-		const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-		return [
-			pluginEnabled(config, "calculator")
-				? computeCalculatorAnswer(q, language ?? "", pageno)
-				: null,
-			pluginEnabled(config, "time_zone") ? computeTimeZoneAnswer(q, pageno) : null,
-			pluginEnabled(config, "self_info")
-				? computeSelfInfoAnswer(q, pageno, config?.client_ip ?? null, ua)
-				: null,
-			pluginEnabled(config, "unit_converter")
-				? computeUnitConverterAnswer(q, pageno)
-				: null,
-			computeStatisticsAnswer(q),
-			computeRandomAnswer(q),
-			computeDateTimeAnswer(q),
-			computeCryptoAnswer(q),
-		].filter((answer) => answer !== null);
-	}, [q, language, pageno, config]);
+	const localAnswers = useLocalAnswers(q, language, pageno, config);
 	const answers = [...localAnswers, ...(firstPage?.answers ?? [])];
 
 	const [lightbox, setLightbox] = useState<SearchResult | null>(null);

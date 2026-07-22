@@ -1,27 +1,6 @@
 import { Download, ExternalLink, FileText, Magnet } from "lucide-react";
 import type { SearchResult } from "#/lib/api";
-
-function hostnameOf(url: string) {
-	try {
-		return new URL(url).hostname.replace(/^www\./, "");
-	} catch {
-		return url;
-	}
-}
-
-function formatEngineLabel(name: string) {
-	return name.replace(/[_-]+/g, " ");
-}
-
-function engineNames(result: SearchResult): string[] {
-	const names =
-		result.engines && result.engines.length > 0
-			? result.engines
-			: result.engine
-				? [result.engine]
-				: [];
-	return [...new Set(names.filter(Boolean))];
-}
+import { engineNames, formatEngineLabel, hostnameOf, pathOf } from "#/lib/searchDisplay";
 
 function EngineLine({ result }: { result: SearchResult }) {
 	const engines = engineNames(result);
@@ -348,3 +327,92 @@ export function specializedTemplate(result: SearchResult, category?: string) {
 }
 
 export { Download };
+
+/** Default (non-specialized) result: favicon, host/path breadcrumb, title, snippet. */
+export function ResultItem({
+	result,
+	newTab = false,
+	urlFormatting = "pretty",
+	cacheUrl = "",
+}: {
+	result: SearchResult;
+	newTab?: boolean;
+	urlFormatting?: string;
+	cacheUrl?: string;
+}) {
+	const host = hostnameOf(result.url);
+	const crumbs = pathOf(result.url)
+		.split("/")
+		.filter(Boolean)
+		.slice(0, 3)
+		.join(" > ");
+	const engines = engineNames(result);
+	const displayUrl =
+		urlFormatting === "full"
+			? result.url
+			: urlFormatting === "host"
+				? host
+				: `${host}${crumbs ? ` > ${crumbs}` : ""}`;
+
+	return (
+		<article className="max-w-[40rem]">
+			<a
+				data-result-link
+				href={result.url}
+				target={newTab ? "_blank" : undefined}
+				rel={newTab ? "noopener noreferrer" : undefined}
+				className="group block no-underline"
+			>
+				<div className="flex items-center gap-2.5">
+					{result.favicon ? (
+						<img
+							src={result.favicon}
+							alt=""
+							width={20}
+							height={20}
+							className="size-5 rounded-[5px] bg-surface-raised ring-1 ring-line/80"
+							loading="lazy"
+							onError={(event) => {
+								event.currentTarget.hidden = true;
+							}}
+						/>
+					) : null}
+					<div className="min-w-0">
+						<p className="truncate text-[0.875rem] leading-tight text-ink">
+							{host}
+						</p>
+						<p className="truncate text-[0.75rem] leading-tight text-ink-subtle">
+							{displayUrl}
+						</p>
+					</div>
+				</div>
+				<h2 className="mt-1.5 text-[1.25rem] leading-snug font-medium tracking-tight text-accent transition-colors group-hover:underline">
+					{result.title}
+				</h2>
+			</a>
+			{result.content ? (
+				<p className="mt-1.5 line-clamp-2 text-[0.9rem] leading-relaxed text-ink-muted">
+					{result.content}
+				</p>
+			) : null}
+			{engines.length > 0 || cacheUrl ? (
+				<p className="mt-1.5 text-[0.75rem] text-ink-subtle">
+					{engines.map(formatEngineLabel).join(" · ")}
+					{cacheUrl ? (
+						<>
+							{engines.length > 0 ? <span aria-hidden> · </span> : null}
+							<a
+								href={cacheUrl + encodeURIComponent(result.url)}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-ink-subtle underline decoration-line underline-offset-2 hover:text-accent"
+							>
+								archive
+							</a>
+						</>
+					) : null}
+				</p>
+			) : null}
+		</article>
+	);
+}
