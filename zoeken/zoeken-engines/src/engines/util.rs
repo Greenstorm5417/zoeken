@@ -251,37 +251,11 @@ pub fn text_content_skipping(el: scraper::ElementRef<'_>, skip_classes: &[&str])
 
 /// Detect anti-bot JavaScript gates or captcha walls in HTML body.
 ///
-/// Some vendors (Cloudflare, DataDome) inject passive beacon scripts into
-/// pages they serve normally, so those markers only count as a wall when the
-/// site actually refused the request; markers unique to interstitial
-/// challenge pages count at any status.
-pub fn looks_like_bot_wall(status: u16, body: &str) -> bool {
-    // Markers that only ever appear on a challenge/captcha interstitial.
-    const CHALLENGE_MARKERS: &[&str] = &[
-        // Fastly "Client Challenge" (pypi.org, metacpan.org)
-        "<title>Client Challenge</title>",
-        // Google sorry page
-        "sorry/index",
-        "sorry.google.com",
-        // Cloudflare managed-challenge interstitial
-        "<title>Just a moment...</title>",
-        // AWS WAF challenge page (goodreads.com)
-        "window.awsWafCookieDomainList",
-        // Anubis proof-of-work wall (wiki.archlinux.org)
-        "Making sure you&#39;re not a bot!",
-        "Making sure you're not a bot!",
-        "id=\"anubis_challenge\"",
-    ];
-    // Beacon scripts that Cloudflare/DataDome also embed in normal pages.
-    const BLOCKED_ONLY_MARKERS: &[&str] = &["/cdn-cgi/challenge-platform/", "captcha-delivery.com"];
-    if CHALLENGE_MARKERS.iter().any(|marker| body.contains(marker)) {
-        return true;
-    }
-    matches!(status, 401 | 403 | 405 | 429 | 503)
-        && BLOCKED_ONLY_MARKERS
-            .iter()
-            .any(|marker| body.contains(marker))
-}
+/// Thin re-export of the shared classifier in `zoeken_engine_core::challenge`
+/// so network and engine parse paths agree on one taxonomy (architecture-cleanup
+/// Phase 0). Engines add vendor-specific selectors on top of this, not a
+/// separate string soup.
+pub use zoeken_engine_core::looks_like_bot_wall;
 
 #[cfg(test)]
 mod tests {
@@ -322,34 +296,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn google_noscript_enablejs_is_not_a_bot_wall() {
-        let body = r#"<html><head><title>Google Search</title></head><body><noscript><meta content="0;url=/httpservice/retry/enablejs?sei=x" http-equiv="refresh"></noscript></body></html>"#;
-        assert!(!looks_like_bot_wall(200, body));
-    }
-
-    #[test]
-    fn passive_cloudflare_beacon_on_ok_page_is_not_a_bot_wall() {
-        // Cloudflare injects this invisible beacon into pages it serves
-        // normally (e.g. wallhaven.cc search results).
-        let body = r#"<html><body><div class="results">real results</div><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>"#;
-        assert!(!looks_like_bot_wall(200, body));
-        assert!(looks_like_bot_wall(403, body));
-    }
-
-    #[test]
-    fn challenge_pages_are_bot_walls_at_any_status() {
-        assert!(looks_like_bot_wall(200, "<title>Client Challenge</title>"));
-        assert!(looks_like_bot_wall(200, "<title>Just a moment...</title>"));
-        assert!(looks_like_bot_wall(
-            202,
-            "<script>window.awsWafCookieDomainList = [];</script>"
-        ));
-        assert!(looks_like_bot_wall(
-            200,
-            "<title>Making sure you&#39;re not a bot!</title>"
-        ));
-    }
+    // `looks_like_bot_wall` behavior is covered by
+    // `zoeken_engine_core::challenge::tests` (single source of truth).
 
     #[test]
     fn text_content_skips_marked_classes_and_scripts() {

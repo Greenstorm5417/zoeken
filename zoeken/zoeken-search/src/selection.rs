@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use zoeken_engine_core::{Engine, EngineError, EngineState, SuspendConfig};
+use zoeken_engine_core::{Engine, EngineError, EngineState, ErrorCategory, SuspendConfig};
 use zoeken_query::SearchQuery;
 
 use crate::execution::{EngineRunStatus, ExecutionReport, UnresponsiveReason};
@@ -173,7 +173,7 @@ impl EngineRegistry {
         prefs: &P,
         available_tokens: &HashSet<String>,
         now: Instant,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<(String, ErrorCategory, String)> {
         self.engines
             .iter()
             .filter_map(|re| {
@@ -190,7 +190,8 @@ impl EngineRegistry {
                     .suspend_reason
                     .clone()
                     .unwrap_or_else(|| "suspended".to_string());
-                Some((re.name().to_string(), reason))
+                let category = state.suspend_category.unwrap_or(ErrorCategory::Unexpected);
+                Some((re.name().to_string(), category, reason))
             })
             .collect()
     }
@@ -212,10 +213,22 @@ impl EngineRegistry {
                 EngineRunStatus::Completed(_) => state.on_success(),
                 EngineRunStatus::Failed(error) => {
                     let explicit = policy.explicit_duration(error);
-                    state.on_error(now, &policy.config, &error.to_string(), explicit);
+                    state.on_error(
+                        now,
+                        &policy.config,
+                        &error.to_string(),
+                        ErrorCategory::from(error),
+                        explicit,
+                    );
                 }
                 EngineRunStatus::Unresponsive(UnresponsiveReason::EngineTimeout) => {
-                    state.on_error(now, &policy.config, &EngineError::Timeout.to_string(), None);
+                    state.on_error(
+                        now,
+                        &policy.config,
+                        &EngineError::Timeout.to_string(),
+                        ErrorCategory::Timeout,
+                        None,
+                    );
                 }
                 EngineRunStatus::Unresponsive(UnresponsiveReason::GlobalDeadline) => {}
             }
@@ -478,6 +491,7 @@ mod tests {
                 Duration::from_secs(3600),
             ),
             "boom",
+            ErrorCategory::Unexpected,
             None,
         );
         let reg = EngineRegistry::from_engines([
@@ -488,7 +502,14 @@ mod tests {
         let selected = reg.select(&q, &AllEnginesEnabled, &HashSet::new(), now);
         assert_eq!(names(&selected), vec!["gamma"]);
         let held = reg.suspended_for_query(&q, &AllEnginesEnabled, &HashSet::new(), now);
-        assert_eq!(held, vec![("alpha".to_string(), "boom".to_string())]);
+        assert_eq!(
+            held,
+            vec![(
+                "alpha".to_string(),
+                ErrorCategory::Unexpected,
+                "boom".to_string()
+            )]
+        );
     }
 
     #[test]
@@ -510,10 +531,13 @@ mod tests {
         let ddg = RegisteredEngine::new(StubEngine::arc("duckduckgo", &["general"]));
         let policy = SuspensionPolicy::default();
         let explicit = policy.explicit_duration(&EngineError::Captcha("duckduckgo".to_string()));
-        ddg.state
-            .lock()
-            .unwrap()
-            .on_error(now, &policy.config, "captcha", explicit);
+        ddg.state.lock().unwrap().on_error(
+            now,
+            &policy.config,
+            "captcha",
+            ErrorCategory::Captcha,
+            explicit,
+        );
 
         let reg = EngineRegistry::from_engines([ddg]);
         let q = query_with(&["general"], &[]);

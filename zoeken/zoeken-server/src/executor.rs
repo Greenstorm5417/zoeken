@@ -600,7 +600,7 @@ mod tests {
             errors: 1,
             circuit_status: "half_open".into(),
             cooldown_until_ms: None,
-            last_error_category: Some("throttle".into()),
+            last_error_category: Some("rate_limited".into()),
         };
         assert_eq!(
             cooldown_for(

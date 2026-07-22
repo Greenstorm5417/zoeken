@@ -237,7 +237,7 @@ mod tests {
         assert!(has_label(
             &captured.counters[0].labels,
             CATEGORY_LABEL,
-            "too_many_requests"
+            "rate_limited"
         ));
     }
 

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use proptest::prelude::*;
-use zoeken_engine_core::{EngineState, SuspendConfig};
+use zoeken_engine_core::{EngineState, ErrorCategory, SuspendConfig};
 
 #[derive(Debug, Clone, Copy)]
 struct Event {
@@ -51,7 +51,7 @@ proptest! {
             };
 
             if event.is_error {
-                state.on_error(now, &cfg, "prop-test error", None);
+                state.on_error(now, &cfg, "prop-test error", ErrorCategory::Unexpected, None);
             } else {
                 state.on_success();
             }

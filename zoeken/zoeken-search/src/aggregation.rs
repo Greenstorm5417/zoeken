@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use zoeken_engine_core::EngineResults;
+use zoeken_engine_core::{EngineResults, ErrorCategory};
 use zoeken_results::{Answer, Correction, Infobox, Result_, Suggestion};
 
 use crate::execution::{EngineRunStatus, ExecutionReport, UnresponsiveReason};
@@ -25,7 +25,12 @@ impl EngineWeights {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnresponsiveCause {
-    Error(String),
+    /// Typed category plus the original message (message is diagnostic only;
+    /// user-facing labels come from the category, not string matching).
+    Error {
+        category: ErrorCategory,
+        message: String,
+    },
     Timeout,
     DeadlineExceeded,
 }
@@ -96,8 +101,13 @@ pub fn aggregate(
                 builder.ingest(&outcome.engine, results, weights);
             }
             EngineRunStatus::Failed(error) => {
-                builder
-                    .add_unresponsive(outcome.engine, UnresponsiveCause::Error(error.to_string()));
+                builder.add_unresponsive(
+                    outcome.engine,
+                    UnresponsiveCause::Error {
+                        category: ErrorCategory::from(&error),
+                        message: error.to_string(),
+                    },
+                );
             }
             EngineRunStatus::Unresponsive(reason) => {
                 let cause = match reason {
@@ -970,7 +980,10 @@ mod tests {
             container.unresponsive_engines[0],
             UnresponsiveEngine {
                 engine: "boom".to_string(),
-                cause: UnresponsiveCause::Error("unexpected engine error: nope".to_string()),
+                cause: UnresponsiveCause::Error {
+                    category: ErrorCategory::Unexpected,
+                    message: "unexpected engine error: nope".to_string(),
+                },
             }
         );
         assert_eq!(

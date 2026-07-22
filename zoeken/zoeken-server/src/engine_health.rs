@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use zoeken_engine_core::{EngineError, EngineResults};
+use zoeken_engine_core::{EngineError, EngineResults, ErrorCategory};
 use zoeken_storage::{EngineHealthSnapshot, EngineHealthUpdate, Storage};
 
 pub(crate) struct PendingHealth {
@@ -75,26 +75,12 @@ pub(crate) fn circuit_is_open(snapshot: Option<&EngineHealthSnapshot>) -> bool {
     })
 }
 
-fn error_category(error: &EngineError) -> &'static str {
-    match error {
-        EngineError::AccessDenied(_) | EngineError::CloudflareAccessDenied(_) => "access_denied",
-        EngineError::Captcha(_)
-        | EngineError::CloudflareCaptcha(_)
-        | EngineError::RecaptchaCaptcha(_) => "captcha",
-        EngineError::TooManyRequests(_) => "throttle",
-        EngineError::Parse(_) => "malformed",
-        EngineError::Timeout => "timeout",
-        EngineError::QueueExpired => "queue_expired",
-        EngineError::Unexpected(_) => "transport",
-    }
-}
-
 pub(crate) fn cooldown_for(
     engine: &str,
     error: &EngineError,
     previous: Option<&EngineHealthSnapshot>,
 ) -> Option<Duration> {
-    let category = error_category(error);
+    let category = ErrorCategory::from(error).as_str();
     let base = match error {
         EngineError::Captcha(_) if engine == "duckduckgo" => {
             let jitter = (unix_ms().unsigned_abs() % 601) + 300;
@@ -155,7 +141,7 @@ pub(crate) async fn record_health(
             (
                 false,
                 matches!(error, EngineError::Timeout),
-                Some(error_category(error).to_string()),
+                Some(ErrorCategory::from(error).as_str().to_string()),
                 if cooldown.is_some() { "open" } else { "closed" },
                 cooldown.map(|value| now.saturating_add(value.as_millis() as i64)),
             )

@@ -5,7 +5,7 @@
       "errors": {
         "timeout": 1,
         "access_denied": 1,
-        "too_many_requests": 1,
+        "rate_limited": 1,
         "parse": 1
       },
       "total": 4

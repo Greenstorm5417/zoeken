@@ -212,7 +212,7 @@ async fn stats_and_errors_shape_with_forced_failure() {
         engine_metrics.record_error("stub", ErrorCategory::Timeout);
         engine_metrics.record_error("stub", ErrorCategory::AccessDenied);
         // HTTP-ish denial and parser failure paths (7.3 golden coverage).
-        engine_metrics.record_error("stub", ErrorCategory::TooManyRequests);
+        engine_metrics.record_error("stub", ErrorCategory::RateLimited);
         engine_metrics.record_error("stub", ErrorCategory::Parse);
     });
 
@@ -252,7 +252,7 @@ async fn stats_and_errors_shape_with_forced_failure() {
         .expect("stub engine errors");
     assert_eq!(stub["errors"]["timeout"], 1);
     assert_eq!(stub["errors"]["access_denied"], 1);
-    assert_eq!(stub["errors"]["too_many_requests"], 1);
+    assert_eq!(stub["errors"]["rate_limited"], 1);
     assert_eq!(stub["errors"]["parse"], 1);
 }
 

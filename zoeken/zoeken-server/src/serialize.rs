@@ -555,24 +555,12 @@ impl JsonResponse {
     }
 }
 
+/// User-facing label for an unresponsive engine. Delegates to the typed
+/// `ErrorCategory` vocabulary shared with metrics/storage health instead of
+/// substring-matching the stringified error (architecture-cleanup Phase 1).
 fn translated_cause(cause: &UnresponsiveCause) -> &'static str {
     match cause {
-        UnresponsiveCause::Error(message) => {
-            let lower = message.to_ascii_lowercase();
-            if lower.contains("captcha") {
-                "blocked by CAPTCHA"
-            } else if lower.contains("access denied") {
-                "access denied"
-            } else if lower.contains("too many requests") {
-                "rate limited"
-            } else if lower.contains("parse") {
-                "bad upstream response"
-            } else if lower.contains("suspend") {
-                "temporarily suspended"
-            } else {
-                "error"
-            }
-        }
+        UnresponsiveCause::Error { category, .. } => category.user_label(),
         UnresponsiveCause::Timeout | UnresponsiveCause::DeadlineExceeded => "timeout",
     }
 }
@@ -638,7 +626,10 @@ mod tests {
             unresponsive_engines: vec![
                 UnresponsiveEngine {
                     engine: "boom".to_string(),
-                    cause: UnresponsiveCause::Error("nope".to_string()),
+                    cause: UnresponsiveCause::Error {
+                        category: zoeken_engine_core::ErrorCategory::Unexpected,
+                        message: "nope".to_string(),
+                    },
                 },
                 UnresponsiveEngine {
                     engine: "slow".to_string(),

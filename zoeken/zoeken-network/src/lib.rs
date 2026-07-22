@@ -423,25 +423,6 @@ impl NetworkRequest {
     }
 }
 
-fn is_cloudflare_challenge(status: u16, body: &str) -> bool {
-    if matches!(status, 429 | 503) {
-        if body.contains("__cf_chl_jschl_tk__=") {
-            return true;
-        }
-        if body.contains("/cdn-cgi/challenge-platform/")
-            && body.contains("orchestrate/jsch/v1")
-            && body.contains("window._cf_chl_enter(")
-        {
-            return true;
-        }
-    }
-    status == 403 && body.contains("__cf_chl_captcha_tk__=")
-}
-
-fn is_cloudflare_firewall(status: u16, body: &str) -> bool {
-    status == 403 && body.contains("<span class=\"cf-error-code\">1020</span>")
-}
-
 fn backoff_duration(attempt: u32) -> Duration {
     let shift = attempt.saturating_sub(1).min(16);
     let scaled = RETRY_BACKOFF_BASE
@@ -670,25 +651,32 @@ impl Network {
             String::new()
         };
 
-        if server_is_cloudflare {
-            if is_cloudflare_challenge(status, &body) {
+        match zoeken_engine_core::classify_challenge(status, server_is_cloudflare, &body) {
+            Some(zoeken_engine_core::ChallengeKind::CloudflareCaptcha) => {
                 return Err(NetworkError::CloudflareCaptcha {
                     name: name.to_string(),
                     status,
                 });
             }
-            if is_cloudflare_firewall(status, &body) {
+            Some(zoeken_engine_core::ChallengeKind::CloudflareFirewall) => {
                 return Err(NetworkError::CloudflareAccessDenied {
                     name: name.to_string(),
                     status,
                 });
             }
-        }
-        if status == 503 && body.contains("\"https://www.google.com/recaptcha/") {
-            return Err(NetworkError::RecaptchaCaptcha {
-                name: name.to_string(),
-                status,
-            });
+            Some(zoeken_engine_core::ChallengeKind::Recaptcha) => {
+                return Err(NetworkError::RecaptchaCaptcha {
+                    name: name.to_string(),
+                    status,
+                });
+            }
+            Some(zoeken_engine_core::ChallengeKind::GenericBotWall) => {
+                return Err(NetworkError::Captcha {
+                    name: name.to_string(),
+                    status,
+                });
+            }
+            None => {}
         }
 
         match status {
@@ -1307,36 +1295,20 @@ mod tests {
     }
 
     #[test]
-    fn cloudflare_challenge_detection_matches_reference() {
-        assert!(is_cloudflare_challenge(
-            503,
-            "...__cf_chl_jschl_tk__=abc..."
-        ));
-        assert!(is_cloudflare_challenge(
-            429,
-            "...__cf_chl_jschl_tk__=abc..."
-        ));
-        let managed = "/cdn-cgi/challenge-platform/ orchestrate/jsch/v1 window._cf_chl_enter(";
-        assert!(is_cloudflare_challenge(503, managed));
-        assert!(!is_cloudflare_challenge(
-            503,
-            "/cdn-cgi/challenge-platform/ only"
-        ));
-        assert!(is_cloudflare_challenge(403, "x __cf_chl_captcha_tk__=zzz"));
-        assert!(!is_cloudflare_challenge(200, "__cf_chl_jschl_tk__="));
-    }
-
-    #[test]
-    fn cloudflare_firewall_detection_matches_reference() {
-        assert!(is_cloudflare_firewall(
-            403,
-            "<span class=\"cf-error-code\">1020</span>"
-        ));
-        assert!(!is_cloudflare_firewall(403, "no marker"));
-        assert!(!is_cloudflare_firewall(
-            503,
-            "<span class=\"cf-error-code\">1020</span>"
-        ));
+    fn challenge_classification_delegates_to_shared_classifier() {
+        use zoeken_engine_core::ChallengeKind;
+        assert_eq!(
+            zoeken_engine_core::classify_challenge(503, true, "...__cf_chl_jschl_tk__=abc..."),
+            Some(ChallengeKind::CloudflareCaptcha)
+        );
+        assert_eq!(
+            zoeken_engine_core::classify_challenge(
+                403,
+                true,
+                "<span class=\"cf-error-code\">1020</span>"
+            ),
+            Some(ChallengeKind::CloudflareFirewall)
+        );
     }
 
     #[test]

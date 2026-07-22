@@ -4403,6 +4403,7 @@ dependencies = [
  "url",
  "wreq",
  "wreq-util",
+ "zoeken-engine-core",
  "zoeken-settings",
  "zoeken-storage",
 ]

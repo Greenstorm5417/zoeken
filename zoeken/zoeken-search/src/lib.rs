@@ -150,7 +150,7 @@ impl Search {
             let report = self.run_engines(&query, prefs, available_tokens).await;
             let weights = self.engine_weights();
             let mut container = aggregate(report, &weights, recorder);
-            for (engine, reason) in
+            for (engine, category, message) in
                 self.registry
                     .suspended_for_query(&query, prefs, available_tokens, now)
             {
@@ -163,7 +163,7 @@ impl Search {
                 }
                 container.unresponsive_engines.push(UnresponsiveEngine {
                     engine,
-                    cause: UnresponsiveCause::Error(reason),
+                    cause: UnresponsiveCause::Error { category, message },
                 });
             }
             container

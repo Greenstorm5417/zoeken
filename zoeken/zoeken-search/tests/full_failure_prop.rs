@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use proptest::prelude::*;
-use zoeken_engine_core::{EngineError, EngineResults};
+use zoeken_engine_core::{EngineError, EngineResults, ErrorCategory};
 use zoeken_search::{
     EngineRunOutcome, EngineRunStatus, EngineWeights, ExecutionReport, NoopRecorder,
     UnresponsiveCause, UnresponsiveEngine, UnresponsiveReason, aggregate,
@@ -46,7 +46,10 @@ fn build_outcome(
             EngineRunStatus::Failed(err.clone()),
             Some(UnresponsiveEngine {
                 engine: engine.clone(),
-                cause: UnresponsiveCause::Error(err.to_string()),
+                cause: UnresponsiveCause::Error {
+                    category: ErrorCategory::from(err),
+                    message: err.to_string(),
+                },
             }),
         ),
         EngineFate::EngineTimeout => (

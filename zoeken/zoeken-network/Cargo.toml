@@ -11,6 +11,7 @@ description.workspace = true
 [dependencies]
 zoeken-settings = { workspace = true }
 zoeken-storage = { workspace = true }
+zoeken-engine-core = { workspace = true }
 metrics = { workspace = true }
 tokio = { workspace = true }
 # cookies + json + decompressors matching browser Accept-Encoding profiles

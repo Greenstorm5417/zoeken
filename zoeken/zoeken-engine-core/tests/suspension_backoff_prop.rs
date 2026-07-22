@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use proptest::prelude::*;
-use zoeken_engine_core::{EngineState, SuspendConfig, suspend_duration};
+use zoeken_engine_core::{EngineState, ErrorCategory, SuspendConfig, suspend_duration};
 
 /// Independent reference for the capped exponential-backoff duration.
 fn expected_capped_backoff(penalty: u32, base: Duration, max: Duration) -> Duration {
@@ -77,7 +77,13 @@ proptest! {
 
         let suspend = Duration::from_millis(suspend_ms);
         let mut state = EngineState::new();
-        state.on_error(base, &cfg, "prop-test suspension", Some(suspend));
+        state.on_error(
+            base,
+            &cfg,
+            "prop-test suspension",
+            ErrorCategory::Unexpected,
+            Some(suspend),
+        );
 
         let suspend_end = state
             .suspend_end

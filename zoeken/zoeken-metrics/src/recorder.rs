@@ -6,6 +6,12 @@ use std::time::Duration;
 use metrics::{counter, histogram};
 use zoeken_engine_core::EngineError;
 
+/// Shared error-category vocabulary (architecture-cleanup Phase 1): the same
+/// enum backs metrics labels, storage health categories, and user-facing
+/// `unresponsive_engines` labels. Kept as a re-export so existing
+/// `zoeken_metrics::ErrorCategory` call sites are unaffected.
+pub use zoeken_engine_core::ErrorCategory;
+
 /// Histogram name for engine's total wall-clock response time in seconds (labeled by ENGINE_LABEL).
 pub const ENGINE_RESPONSE_TIME_TOTAL: &str = "zoeken_engine_response_time_total_seconds";
 
@@ -21,59 +27,9 @@ pub const ENGINE_LABEL: &str = "engine";
 /// Label key carrying the [`ErrorCategory`] on the error counter.
 pub const CATEGORY_LABEL: &str = "category";
 
-/// Category for engine outcome on the error counter. First six variants
-/// mirror EngineError taxonomy; Unresponsive has no EngineError counterpart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ErrorCategory {
-    /// Request timed out.
-    Timeout,
-    /// Access blocked.
-    AccessDenied,
-    /// Too many requests.
-    TooManyRequests,
-    /// CAPTCHA challenge.
-    Captcha,
-    /// Failed to parse response.
-    Parse,
-    /// Other unexpected failure.
-    Unexpected,
-    /// Request budget expired in the shared-origin queue.
-    QueueExpired,
-    /// Engine never responded.
-    Unresponsive,
-}
-
-impl ErrorCategory {
-    /// Stable label value used for this category on error counter.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            ErrorCategory::Timeout => "timeout",
-            ErrorCategory::AccessDenied => "access_denied",
-            ErrorCategory::TooManyRequests => "too_many_requests",
-            ErrorCategory::Captcha => "captcha",
-            ErrorCategory::Parse => "parse",
-            ErrorCategory::Unexpected => "unexpected",
-            ErrorCategory::QueueExpired => "queue_expired",
-            ErrorCategory::Unresponsive => "unresponsive",
-        }
-    }
-}
-
 /// Map EngineError to ErrorCategory. Pure, total function for testability.
-pub const fn categorize_error(error: &EngineError) -> ErrorCategory {
-    match error {
-        EngineError::Timeout => ErrorCategory::Timeout,
-        EngineError::AccessDenied(_) | EngineError::CloudflareAccessDenied(_) => {
-            ErrorCategory::AccessDenied
-        }
-        EngineError::TooManyRequests(_) => ErrorCategory::TooManyRequests,
-        EngineError::Captcha(_)
-        | EngineError::CloudflareCaptcha(_)
-        | EngineError::RecaptchaCaptcha(_) => ErrorCategory::Captcha,
-        EngineError::Parse(_) => ErrorCategory::Parse,
-        EngineError::QueueExpired => ErrorCategory::QueueExpired,
-        EngineError::Unexpected(_) => ErrorCategory::Unexpected,
-    }
+pub fn categorize_error(error: &EngineError) -> ErrorCategory {
+    ErrorCategory::from(error)
 }
 
 /// Records per-engine timing and categorized errors via `metrics` facade.
@@ -296,8 +252,8 @@ mod tests {
             ),
             (
                 EngineError::TooManyRequests("429".into()),
-                ErrorCategory::TooManyRequests,
-                "too_many_requests",
+                ErrorCategory::RateLimited,
+                "rate_limited",
             ),
             (
                 EngineError::Captcha("solve me".into()),

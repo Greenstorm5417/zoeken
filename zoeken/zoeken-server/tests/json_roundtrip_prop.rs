@@ -324,9 +324,26 @@ fn infobox() -> impl Strategy<Value = Infobox> {
         )
 }
 
+fn error_category() -> impl Strategy<Value = zoeken_engine_core::ErrorCategory> {
+    use zoeken_engine_core::ErrorCategory;
+    prop_oneof![
+        Just(ErrorCategory::Captcha),
+        Just(ErrorCategory::CloudflareCaptcha),
+        Just(ErrorCategory::RecaptchaCaptcha),
+        Just(ErrorCategory::AccessDenied),
+        Just(ErrorCategory::RateLimited),
+        Just(ErrorCategory::Timeout),
+        Just(ErrorCategory::QueueExpired),
+        Just(ErrorCategory::Parse),
+        Just(ErrorCategory::Unexpected),
+        Just(ErrorCategory::Unresponsive),
+    ]
+}
+
 fn unresponsive_cause() -> impl Strategy<Value = UnresponsiveCause> {
     prop_oneof![
-        ".*".prop_map(UnresponsiveCause::Error),
+        (error_category(), ".*")
+            .prop_map(|(category, message)| UnresponsiveCause::Error { category, message }),
         Just(UnresponsiveCause::Timeout),
         Just(UnresponsiveCause::DeadlineExceeded),
     ]

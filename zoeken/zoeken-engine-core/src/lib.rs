@@ -8,6 +8,11 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod challenge;
+pub mod error_category;
+
+pub use challenge::{ChallengeKind, classify_challenge, looks_like_bot_wall};
+pub use error_category::ErrorCategory;
 pub use zoeken_results::{
     Answer, Code, Correction, FileResult, Image, Infobox, KeyValue, MainResult, Paper, Result_,
     ResultItem, ResultKind, Suggestion, Template,
@@ -362,6 +367,9 @@ pub struct EngineState {
     pub continuous_errors: u32,
     pub suspend_end: Option<Instant>,
     pub suspend_reason: Option<String>,
+    /// Same [`ErrorCategory`] vocabulary as metrics/storage health, so
+    /// suspend reasons don't drift into a fourth ad-hoc taxonomy.
+    pub suspend_category: Option<ErrorCategory>,
 }
 
 impl EngineState {
@@ -385,6 +393,7 @@ impl EngineState {
         now: Instant,
         cfg: &SuspendConfig,
         reason: &str,
+        category: ErrorCategory,
         explicit: Option<Duration>,
     ) {
         if self.is_suspended(now) {
@@ -392,20 +401,27 @@ impl EngineState {
         }
         self.continuous_errors = self.continuous_errors.saturating_add(1);
         match explicit {
-            Some(duration) => self.apply_suspension(now, duration, reason),
+            Some(duration) => self.apply_suspension(now, duration, reason, category),
             None => {
                 if cfg.threshold != 0 && self.continuous_errors >= cfg.threshold {
                     let penalty = self.continuous_errors - cfg.threshold;
                     let duration = suspend_duration(penalty, cfg.base, cfg.max);
-                    self.apply_suspension(now, duration, reason);
+                    self.apply_suspension(now, duration, reason, category);
                 }
             }
         }
     }
 
-    fn apply_suspension(&mut self, now: Instant, duration: Duration, reason: &str) {
+    fn apply_suspension(
+        &mut self,
+        now: Instant,
+        duration: Duration,
+        reason: &str,
+        category: ErrorCategory,
+    ) {
         self.suspend_end = Some(now + duration);
         self.suspend_reason = Some(reason.to_string());
+        self.suspend_category = Some(category);
     }
 }
 

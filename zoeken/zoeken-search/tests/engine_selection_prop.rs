@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use proptest::prelude::*;
 
 use zoeken_engine_core::{
-    Engine, EngineError, EngineMeta, EngineResponse, EngineResults, RequestParams, SearchQueryView,
-    SuspendConfig,
+    Engine, EngineError, EngineMeta, EngineResponse, EngineResults, ErrorCategory, RequestParams,
+    SearchQueryView, SuspendConfig,
 };
 use zoeken_query::SearchQuery;
 use zoeken_search::{EnabledEngineSet, EngineRegistry, RegisteredEngine, SelectedEngine};
@@ -174,6 +174,7 @@ proptest! {
                     now,
                     &SuspendConfig::new(1, hour, hour),
                     "suspended",
+                    ErrorCategory::Unexpected,
                     Some(hour),
                 );
             }
