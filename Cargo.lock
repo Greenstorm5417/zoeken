@@ -4346,15 +4346,19 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2 0.11.0",
  "sqlx",
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
  "url",
  "zoeken-data",
  "zoeken-engine-core",
  "zoeken-results",
+ "zoeken-search",
+ "zoeken-settings",
 ]
 
 [[package]]

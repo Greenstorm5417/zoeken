@@ -5,6 +5,9 @@
 
 pub mod conformance;
 pub mod engines;
+pub mod registry;
+
+pub use registry::registry_from_settings;
 
 pub use conformance::{
     ConformanceMismatch, Fixture, FixtureError, load_fixture, load_fixtures, load_fixtures_for,
