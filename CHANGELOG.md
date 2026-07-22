@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-22
+
 ### Changed
 
 - SPA `search()` now requests MessagePack (`Accept: application/msgpack`) from
   `POST /api/v1/search`; JSON remains available for curl/compat.
+
+### Fixed
+
+- SPA native search field consumption: render full paper citation fields, torrent
+  author/abstract/size, and main `published_date`/`pretty_url`; rewrite paper/file
+  URLs in client features; honor `correction.url`.
 
 ## [1.3.0] - 2026-07-22
 
@@ -255,6 +263,7 @@ with Debian packages, systemd unit, and multi-arch Docker images on GHCR.
 - Command engines and several API-key / bespoke engines remain intentionally unsupported
 - See `docs/compatibility/intentional-differences.md` and `docs/security/audit.md`
 
+[1.3.1]: https://github.com/Greenstorm5417/zoeken/releases/tag/v1.3.1
 [1.3.0]: https://github.com/Greenstorm5417/zoeken/releases/tag/v1.3.0
 [1.2.2]: https://github.com/Greenstorm5417/zoeken/releases/tag/v1.2.2
 [1.2.1]: https://github.com/Greenstorm5417/zoeken/releases/tag/v1.2.1
