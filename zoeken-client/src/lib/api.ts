@@ -89,6 +89,7 @@ export type Config = {
 		"botdetection.ip_lists.pass_reserved_nets": boolean;
 	};
 	doi_resolvers: string[];
+	doi_resolver_urls: Record<string, string>;
 	default_doi_resolver: string;
 	categories_as_tabs?: string[];
 	ui?: {
@@ -106,6 +107,8 @@ export type Config = {
 		high_priority: string[];
 		low_priority: string[];
 	};
+	/** Requester's IP as seen by the instance, for the self_info client feature. */
+	client_ip: string | null;
 };
 
 export type Preferences = {

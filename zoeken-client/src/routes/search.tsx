@@ -15,6 +15,7 @@ import {
 	type SearchResult,
 	search,
 } from "#/lib/api";
+import { applyClientFeatures } from "#/lib/clientFeatures";
 import { pickDidYouMean } from "#/lib/didYouMean";
 import { stringsFor } from "#/lib/i18n";
 import {
@@ -476,7 +477,7 @@ function SearchPage() {
 				merged.push(result);
 			}
 		}
-		return merged;
+		return applyClientFeatures(merged, config);
 	})();
 
 	const [lightbox, setLightbox] = useState<SearchResult | null>(null);

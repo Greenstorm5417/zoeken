@@ -15,6 +15,8 @@ pub mod readiness;
 pub mod serialize;
 pub mod serve;
 pub mod static_assets;
+mod ahmia_filter;
+mod tracker_cleanup;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -688,7 +690,7 @@ async fn run_search(
 
     let tokens = request_tokens(&params);
     let plugin_ctx = plugin_context(state, headers, peer, &resolved_prefs);
-    let container = state
+    let mut container = state
         .search
         .run_with_plugin_ctx(
             &query,
@@ -698,6 +700,12 @@ async fn run_search(
             &plugin_ctx,
         )
         .await;
+    tracker_cleanup::strip_trackers(&mut container, &state.data.tracker_patterns);
+    ahmia_filter::filter_blacklisted_onions(
+        &mut container,
+        &state.data.ahmia_blacklist,
+        state.settings.outgoing.using_tor_proxy,
+    );
 
     if query.redirect.is_some()
         && let Some(target) = container.results.iter().find_map(|result| match result {

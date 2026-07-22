@@ -4504,6 +4504,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "ipnet",
+ "md-5",
  "metrics",
  "metrics-exporter-prometheus",
  "proptest",

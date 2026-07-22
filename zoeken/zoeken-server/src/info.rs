@@ -51,11 +51,14 @@ struct ConfigResponse {
     brand: BrandInfo,
     limiter: LimiterInfo,
     doi_resolvers: Vec<String>,
+    doi_resolver_urls: BTreeMap<String, String>,
     default_doi_resolver: String,
     categories_as_tabs: Vec<String>,
     ui: UiInfo,
     /// Instance-level hostname rewrite rules (from `hostnames:` in settings).
     hostnames: HostnamesInfo,
+    /// Requester's IP as seen by the instance (client feature: self_info).
+    client_ip: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -170,8 +173,19 @@ fn engine_categories(state: &AppState) -> Vec<String> {
 }
 
 /// `GET /config` as JSON.
-pub async fn config(State(state): State<Arc<AppState>>) -> Response {
+pub async fn config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    crate::middleware::OptionalPeer(peer): crate::middleware::OptionalPeer,
+) -> Response {
+    let client_ip = crate::middleware::request_client_ip(
+        peer,
+        &headers,
+        &state.bot_detector.config().trusted_proxies,
+    )
+    .map(|ip| ip.to_string());
     let response = ConfigResponse {
+        client_ip,
         categories: engine_categories(&state),
         engines: engine_infos(&state),
         plugins: plugin_infos(&state),
@@ -214,6 +228,11 @@ pub async fn config(State(state): State<Arc<AppState>>) -> Response {
             state.data.doi_resolvers.resolvers.keys().cloned().collect()
         } else {
             state.settings.doi_resolvers.keys().cloned().collect()
+        },
+        doi_resolver_urls: if state.settings.doi_resolvers.is_empty() {
+            state.data.doi_resolvers.resolvers.clone()
+        } else {
+            state.settings.doi_resolvers.clone()
         },
         default_doi_resolver: state
             .settings
