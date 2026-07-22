@@ -1,0 +1,4 @@
+# Project-local cargo-audit config (see https://docs.rs/cargo-audit)
+[advisories]
+# Transitive via unused sqlx-mysql; Marvin Attack has no fixed rsa release.
+ignore = ["RUSTSEC-2023-0071"]
