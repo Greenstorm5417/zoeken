@@ -11,6 +11,7 @@ pub mod image_proxy;
 pub mod info;
 pub mod limiter;
 pub mod middleware;
+pub mod native;
 mod outbound_cache;
 pub mod preferences;
 pub mod readiness;
@@ -24,10 +25,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::{FromRef, RawQuery, State};
+use axum::extract::{FromRef, Json, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use url::form_urlencoded;
 use zoeken_network::{NetworkError, NetworkManager};
 use zoeken_prefs::Preferences;
@@ -459,6 +460,7 @@ pub fn app(state: AppState) -> Router {
     let router = Router::new()
         .route("/", get(frontend::index).post(frontend::index))
         .route("/search", get(search_get).post(search_post))
+        .route("/api/v1/search", post(native_search_post))
         .route(
             "/autocompleter",
             get(autocompleter::autocompleter_get).post(autocompleter::autocompleter_post),
@@ -520,6 +522,166 @@ async fn search_post(
     let mut pairs = parse_pairs(query.as_deref().unwrap_or(""));
     pairs.extend(parse_pairs(&body));
     run_search(&state, &headers, FormParams::from_pairs(pairs)).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeWireFormat {
+    Json,
+    Msgpack,
+}
+
+fn native_wire_format(headers: &HeaderMap, query: Option<&str>) -> NativeWireFormat {
+    for (key, value) in form_urlencoded::parse(query.unwrap_or("").as_bytes()) {
+        if key.eq_ignore_ascii_case("format") {
+            if value.eq_ignore_ascii_case("msgpack") {
+                return NativeWireFormat::Msgpack;
+            }
+            if value.eq_ignore_ascii_case("json") {
+                return NativeWireFormat::Json;
+            }
+        }
+    }
+    if let Some(accept) = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()) {
+        let lower = accept.to_ascii_lowercase();
+        if lower.split(',').any(|part| {
+            let mime = part.split(';').next().unwrap_or("").trim();
+            mime == "application/msgpack" || mime == "application/x-msgpack"
+        }) {
+            return NativeWireFormat::Msgpack;
+        }
+    }
+    NativeWireFormat::Json
+}
+
+async fn native_search_post(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+    body: Result<Json<native::NativeSearchRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Json(request) = match body {
+        Ok(json) => json,
+        Err(error) => {
+            let message = serde_json::to_string(&error.body_text())
+                .unwrap_or_else(|_| "\"invalid json\"".into());
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                format!(r#"{{"error":"invalid_json","message":{message}}}"#),
+            )
+                .into_response();
+        }
+    };
+    if request.q.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"missing_query","message":"q is required"}"#,
+        )
+            .into_response();
+    }
+
+    let wire = native_wire_format(&headers, query.as_deref());
+    let params = request.to_form_params();
+    let pref_cookie = preferences::read_pref_cookie(&headers);
+    let resolved_prefs = zoeken_prefs::resolve_with_data(
+        &state.pref_defaults,
+        &state.settings,
+        pref_cookie.as_deref(),
+        &params,
+        &state.data,
+    );
+
+    let search_query = match zoeken_query::from_params(&params, &resolved_prefs, &state.data) {
+        Ok(query) => query,
+        Err(error) => {
+            let message = serde_json::to_string(&error.to_string())
+                .unwrap_or_else(|_| "\"invalid query\"".into());
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                format!(r#"{{"error":"invalid_query","message":{message}}}"#),
+            )
+                .into_response();
+        }
+    };
+
+    if state.settings.search.max_page > 0 && search_query.pageno > state.settings.search.max_page {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            format!(
+                r#"{{"error":"pageno_exceeded","message":"pageno exceeds configured maximum of {}"}}"#,
+                state.settings.search.max_page
+            ),
+        )
+            .into_response();
+    }
+    if let Some(external) = &search_query.external_bang {
+        return axum::response::Redirect::temporary(&external.target_url).into_response();
+    }
+
+    let tokens = request_tokens(&params);
+    let mut container = state
+        .search
+        .run(
+            &search_query,
+            &engine_preferences(&resolved_prefs),
+            &tokens,
+            state.recorder.as_ref(),
+        )
+        .await;
+    if resolved_prefs
+        .plugins
+        .get("ahmia_filter")
+        .copied()
+        .unwrap_or(true)
+    {
+        ahmia_filter::filter_blacklisted_onions(
+            &mut container,
+            &state.data.ahmia_blacklist,
+            state.settings.outgoing.using_tor_proxy,
+        );
+    }
+
+    if search_query.redirect.is_some()
+        && let Some(target) = container.results.iter().find_map(|result| match result {
+            zoeken_results::Result_::Main(result) => Some(result.url.as_str()),
+            zoeken_results::Result_::Image(result) => Some(result.url.as_str()),
+            _ => None,
+        })
+    {
+        return axum::response::Redirect::temporary(target).into_response();
+    }
+
+    let category = request
+        .categories
+        .as_deref()
+        .or(search_query.categories.first().map(String::as_str))
+        .unwrap_or("general");
+    let response = native::NativeSearchResponse::from_container(
+        &search_query.query,
+        &container,
+        serialize::ProxySettings {
+            secret_key: &state.settings.server.secret_key,
+            image_proxy: resolved_prefs.image_proxy,
+            favicon_proxy: !state.settings.search.favicon_resolver.is_empty(),
+        },
+        native::NativeMapContext { category },
+    );
+
+    match wire {
+        NativeWireFormat::Json => (
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec()),
+        )
+            .into_response(),
+        NativeWireFormat::Msgpack => (
+            [(header::CONTENT_TYPE, "application/msgpack")],
+            rmp_serde::to_vec_named(&response).unwrap_or_default(),
+        )
+            .into_response(),
+    }
 }
 
 async fn run_search(state: &AppState, headers: &HeaderMap, params: FormParams) -> Response {
@@ -1015,5 +1177,98 @@ mod route_tests {
             text.contains('q'),
             "error should name the parameter: {text}"
         );
+    }
+
+    #[tokio::test]
+    async fn native_search_returns_schema_version_and_tagged_results() {
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/search")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"q":"rust","categories":"general"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["query"], "rust");
+        assert_eq!(value["number_of_results"], 1);
+        assert_eq!(value["results"][0]["kind"], "main");
+        assert_eq!(value["results"][0]["engine"], "stub");
+        assert_eq!(value["results"][0]["category"], "general");
+    }
+
+    #[tokio::test]
+    async fn native_search_rejects_empty_query() {
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/search")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"q":"  "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"], "missing_query");
+    }
+
+    #[tokio::test]
+    async fn native_search_rejects_invalid_json() {
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/search")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{not-json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"], "invalid_json");
+    }
+
+    #[tokio::test]
+    async fn native_search_msgpack_via_accept() {
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/search")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::ACCEPT, "application/msgpack")
+                    .body(Body::from(r#"{"q":"rust"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/msgpack"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: native::NativeSearchResponse = rmp_serde::from_slice(&body).unwrap();
+        assert_eq!(value.schema_version, 1);
+        assert_eq!(value.query, "rust");
+        assert_eq!(value.results.len(), 1);
     }
 }

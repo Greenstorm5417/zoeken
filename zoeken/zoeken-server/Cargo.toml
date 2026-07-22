@@ -12,6 +12,10 @@ description.workspace = true
 name = "zoeken-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "export-native-ts"
+path = "src/bin/export_native_ts.rs"
+
 [lib]
 name = "zoeken_server"
 path = "src/lib.rs"
@@ -55,6 +59,8 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
 md5 = { workspace = true }
+ts-rs = { workspace = true }
+rmp-serde = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

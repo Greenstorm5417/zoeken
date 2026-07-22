@@ -178,10 +178,10 @@ impl Engine for Soundcloud {
     }
 
     fn prepare_request(&self, params: &mut RequestParams) {
-        if !params
+        if params
             .engine_data
             .get(CLIENT_ID_KEY)
-            .is_some_and(|id| !id.is_empty())
+            .is_none_or(|id| id.is_empty())
         {
             params.needs_client_id = true;
         }

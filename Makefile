@@ -2,7 +2,7 @@ ASSETS_DIR := zoeken/zoeken-server/assets
 VERSION ?= $(shell ./packaging/scripts/package-version.sh)
 OUT_DIR ?= dist
 
-.PHONY: help clean-assets build client package deb deb-amd64 deb-arm64 docker
+.PHONY: help clean-assets build client package deb deb-amd64 deb-arm64 docker native-types check-native-types
 
 help:
 	@echo "make targets:"
@@ -13,7 +13,15 @@ help:
 	@echo "  deb-amd64         build amd64 .deb (native x86_64 host)"
 	@echo "  deb-arm64         build arm64 .deb (native aarch64 host)"
 	@echo "  docker            docker build -t zoeken:local ."
+	@echo "  native-types      regenerate SPA types from Rust wire DTOs"
+	@echo "  check-native-types fail if generated native.ts drifts"
 	@echo "  clean-assets      Remove built assets, keeping .gitkeep / rss.xsl / logo"
+
+native-types:     ## regenerate SPA types from Rust wire DTOs
+	cargo run --locked -p zoeken-server --bin export-native-ts
+
+check-native-types: native-types
+	git diff --exit-code -- zoeken-client/src/lib/generated/native.ts
 
 clean-assets:
 	@find $(ASSETS_DIR) -mindepth 1 ! -name '.gitkeep' ! -name 'rss.xsl' ! -name 'zoeken-logo.svg' -exec rm -rf {} +
