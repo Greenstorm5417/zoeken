@@ -71,6 +71,14 @@
     {
       "asset": "tracker patterns",
       "notes": "SPA source in zoeken-data/data; synced to zoeken-client (not server-embedded)",
+      "rust_files": [
+        "tracker_patterns.json"
+      ],
+      "status": "present",
+      "upstream_candidates": [
+        "data/tracker_patterns.json",
+        "tracker_patterns.json"
+      ]
     },
     {
       "asset": "Ahmia blacklist",
