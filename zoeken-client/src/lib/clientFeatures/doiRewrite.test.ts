@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { SearchResult } from "../api";
 import { applyDoiRewrite, extractDoi } from "./doiRewrite";
+import { mainResult, paperResult } from "./fixtures";
 
-function result(overrides: Partial<SearchResult> = {}): SearchResult {
-	return { url: "", title: "", ...overrides };
+function result(url: string) {
+	return mainResult({ url });
 }
 
 describe("extractDoi", () => {
@@ -39,44 +39,43 @@ describe("extractDoi", () => {
 
 describe("applyDoiRewrite", () => {
 	it("rewrites the URL to the resolver + DOI", () => {
-		const input = result({ url: "https://publisher.test/10.1234/abc" });
+		const input = result("https://publisher.test/10.1234/abc");
 		const out = applyDoiRewrite(input, "https://oadoi.org/");
 		expect(out.url).toBe("https://oadoi.org/10.1234/abc");
 	});
 
-	it("sets result.doi for paper-template results without one", () => {
-		const input = result({
+	it("sets result.doi for paper results without one", () => {
+		const input = paperResult({
 			url: "https://publisher.test/10.1234/abc",
-			template: "paper.html",
+			doi: "",
 		});
 		const out = applyDoiRewrite(input, "https://oadoi.org/");
-		expect(out.doi).toBe("10.1234/abc");
+		expect(out.kind === "paper" && out.doi).toBe("10.1234/abc");
 	});
 
 	it("does not overwrite an existing doi field", () => {
-		const input = result({
+		const input = paperResult({
 			url: "https://publisher.test/10.1234/abc",
-			template: "paper.html",
 			doi: "10.9999/keep",
 		});
 		const out = applyDoiRewrite(input, "https://oadoi.org/");
-		expect(out.doi).toBe("10.9999/keep");
+		expect(out.kind === "paper" && out.doi).toBe("10.9999/keep");
 	});
 
-	it("leaves non-paper results' doi field untouched", () => {
-		const input = result({ url: "https://publisher.test/10.1234/abc" });
+	it("leaves non-paper results without a doi field", () => {
+		const input = result("https://publisher.test/10.1234/abc");
 		const out = applyDoiRewrite(input, "https://oadoi.org/");
-		expect(out.doi).toBeUndefined();
+		expect(out.kind).toBe("main");
 	});
 
 	it("passes through when no DOI is found", () => {
-		const input = result({ url: "https://example.test/article" });
+		const input = result("https://example.test/article");
 		expect(applyDoiRewrite(input, "https://oadoi.org/")).toEqual(input);
 	});
 
 	it("passes through overly long DOIs unchanged", () => {
 		const longDoi = `10.1234/${"a".repeat(60)}`;
-		const input = result({ url: `https://publisher.test/${longDoi}` });
+		const input = result(`https://publisher.test/${longDoi}`);
 		expect(applyDoiRewrite(input, "https://oadoi.org/")).toEqual(input);
 	});
 });

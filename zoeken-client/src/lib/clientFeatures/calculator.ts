@@ -86,6 +86,7 @@ export function computeCalculatorAnswer(
 	return {
 		answer: formatCalcNumber(result.value),
 		engine: "calculator",
+		url: null,
 		interactive,
 	};
 }

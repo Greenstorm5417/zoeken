@@ -1,11 +1,12 @@
 # Route And Schema Parity Matrix
 
-Upstream routes: 22. Rust routes: 25. Matching paths: 22. Missing upstream paths: 0.
+Upstream routes: 22. Rust routes: 26. Matching paths: 22. Missing upstream paths: 0.
 
 | Path | Status | Upstream methods | Rust methods | Notes |
 | --- | --- | --- | --- | --- |
 | / | ported | GET, POST | GET, POST | implemented path; status/header/body parity needs route tests |
 | /about | ported | GET | GET | implemented path; status/header/body parity needs route tests |
+| /api/v1/search | rust-only |  | POST | Zoeken native typed search (SPA); JSON + optional msgpack |
 | /autocompleter | ported | GET, POST | GET, POST | implemented path; status/header/body parity needs route tests |
 | /bangs | rust-only |  | GET | External bang discovery (`?q=` filter); SPA help panel |
 | /clear_cookies | ported | GET | GET | implemented path; status/header/body parity needs route tests |

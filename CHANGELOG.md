@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Native typed search API: `POST /api/v1/search` with tagged result variants,
+  `schema_version`, full corrections/suggestions/unresponsive objects, and
+  optional MessagePack (`Accept: application/msgpack` or `?format=msgpack`).
+  SPA uses the native JSON endpoint; SearXNG `/search?format=json|csv|rss`
+  remains the external compat layer. TypeScript bindings are generated via
+  `export-native-ts` / `make native-types`.
+
 ## [1.2.2] - 2026-07-22
 
 ### Fixed

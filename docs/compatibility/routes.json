@@ -25,6 +25,15 @@
       ]
     },
     {
+      "path": "/api/v1/search",
+      "status": "rust-only",
+      "upstream_methods": [],
+      "rust_methods": [
+        "POST"
+      ],
+      "notes": "Zoeken native typed search (SPA); JSON + optional msgpack"
+    },
+    {
       "notes": "implemented path; status/header/body parity needs route tests",
       "path": "/autocompleter",
       "rust_methods": [
@@ -284,7 +293,7 @@
   ],
   "summary": {
     "upstream_routes": 22,
-    "rust_routes": 25,
+    "rust_routes": 26,
     "matching_paths": 22,
     "missing": 0
   }

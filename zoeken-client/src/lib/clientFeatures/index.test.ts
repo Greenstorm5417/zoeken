@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Config, SearchResult } from "../api";
+import type { Config } from "../api";
+import { mainResult } from "./fixtures";
 import { applyClientFeatures } from "./index";
 
-function result(
-	url: string,
-	overrides: Partial<SearchResult> = {},
-): SearchResult {
-	return { url, title: "", ...overrides };
+function result(url: string) {
+	return mainResult({ url });
 }
 
 function config(overrides: Partial<Config> = {}): Config {

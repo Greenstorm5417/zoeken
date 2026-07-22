@@ -55,5 +55,7 @@ export function computeStatisticsAnswer(query: string): SearchAnswer | null {
 	return {
 		answer: `${op}(${args}) = ${formatNumber(result)}`,
 		engine: "statistics",
+		url: null,
+		interactive: null,
 	};
 }

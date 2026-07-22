@@ -1,4 +1,23 @@
-/** Thin fetch helpers for the SearXNG-compatible zoeken-server API. */
+/** Thin fetch helpers for zoeken-server (native search + SearXNG-compat prefs/config). */
+
+export type {
+	NativeAnswer as SearchAnswer,
+	NativeCorrection,
+	NativeInfobox as Infobox,
+	NativeInfoboxUrl as InfoboxUrl,
+	NativeInteractiveAnswer as InteractiveAnswer,
+	NativeResult as SearchResult,
+	NativeSearchRequest,
+	NativeSearchResponse as SearchResponse,
+	NativeSuggestion,
+	NativeUnresponsiveEngine,
+} from "./generated/native";
+
+import type {
+	NativeResult,
+	NativeSearchRequest,
+	NativeSearchResponse,
+} from "./generated/native";
 
 export class ApiError extends Error {
 	status: number;
@@ -26,7 +45,6 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type SearchParams = {
 	q: string;
-	format?: "json" | "csv" | "rss";
 	pageno?: number;
 	language?: string;
 	safesearch?: 0 | 1 | 2;
@@ -123,164 +141,21 @@ export type Preferences = {
 	plugins: Record<string, boolean>;
 };
 
-export type SearchResult = {
-	url: string;
-	title: string;
-	content?: string;
-	engine?: string;
-	engines?: string[];
-	category?: string;
-	pretty_url?: string;
-	thumbnail?: string;
-	favicon?: string;
-	img_src?: string;
-	iframe_src?: string;
-	template?: string;
-	publishedDate?: string;
-	// Torrent / file results (files.html)
-	magnetlink?: string;
-	seed?: number;
-	leech?: number;
-	filesize?: string;
-	filename?: string;
-	// Paper results (paper.html)
-	authors?: string[];
-	journal?: string;
-	doi?: string;
-	publisher?: string;
-	pdf_url?: string;
-	html_url?: string;
-	tags?: string[];
-	// Code results (code.html)
-	repository?: string;
-	codelines?: Array<[number, string]>;
-	code_language?: string;
-	// Key-value results (keyvalue.html)
-	kvmap?: Record<string, string>;
-	// Image results (images.html)
-	resolution?: string;
-	img_format?: string;
-	source?: string;
-};
-
-export type InteractiveAnswer =
-	| {
-			type: "unit";
-			amount: number;
-			from: string;
-			to: string;
-			result: number;
-			dimension: string;
-	  }
-	| {
-			type: "currency";
-			amount: number;
-			from: string;
-			to: string;
-			result: number;
-			rate: number;
-	  }
-	| {
-			type: "calculator";
-			expression: string;
-			result: number;
-	  }
-	| {
-			type: "weather";
-			place: string;
-			description: string;
-			temp_c: string;
-			temp_f: string;
-			feels_c: string;
-			wind_kmph: string;
-			wind_dir: string;
-			humidity: string;
-	  }
-	| {
-			type: "self_info";
-			kind: string;
-			value: string;
-	  }
-	| {
-			type: "crypto";
-			mode: string;
-			algorithm: string;
-			input: string;
-	  }
-	| {
-			type: "translate";
-			source: string;
-			target_lang: string;
-			translated: string;
-	  }
-	| {
-			type: "dictionary";
-			term: string;
-			definitions: string[];
-	  }
-	| {
-			type: "wikipedia";
-			title: string;
-			extract: string;
-			description?: string;
-			img_src?: string;
-			url?: string;
-	  };
-
-export type SearchAnswer = {
-	answer: string;
-	url?: string;
-	engine?: string;
-	template?: string;
-	interactive?: InteractiveAnswer;
-};
-
-export type InfoboxUrl = {
-	title: string;
-	url: string;
-};
-
-export type Infobox = {
-	infobox: string;
-	id?: string | null;
-	content?: string;
-	img_src?: string | null;
-	urls?: InfoboxUrl[];
-	attributes?: Array<{
-		label: string;
-		value?: string;
-		image?: { src: string; alt?: string } | null;
-	}>;
-	related_topics?: string[];
-	engine?: string;
-};
-
-export type SearchResponse = {
-	query: string;
-	number_of_results?: number;
-	results: SearchResult[];
-	answers: SearchAnswer[];
-	corrections: Array<string | { correction: string; url?: string }>;
-	infoboxes: Infobox[];
-	suggestions: Array<string | { suggestion: string }>;
-	unresponsive_engines: Array<[string, string]>;
-};
-
+/** Native typed search (`POST /api/v1/search`). */
 export function search(params: SearchParams) {
-	const body = new URLSearchParams();
-	body.set("q", params.q);
-	body.set("format", params.format ?? "json");
-	if (params.pageno != null) body.set("pageno", String(params.pageno));
-	if (params.language) body.set("language", params.language);
-	if (params.safesearch != null)
-		body.set("safesearch", String(params.safesearch));
-	if (params.categories) body.set("categories", params.categories);
-	if (params.time_range) body.set("time_range", params.time_range);
-	if (params.engines) body.set("engines", params.engines);
-	return getJson<SearchResponse>("/search", {
+	const body: NativeSearchRequest = {
+		q: params.q,
+		pageno: params.pageno ?? 1,
+		language: params.language ?? null,
+		safesearch: params.safesearch ?? null,
+		categories: params.categories ?? null,
+		time_range: params.time_range ?? null,
+		engines: params.engines ?? null,
+	};
+	return getJson<NativeSearchResponse>("/api/v1/search", {
 		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body,
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
 	});
 }
 
@@ -376,4 +251,24 @@ export function stats() {
 
 export function statsErrors() {
 	return getJson<ErrorStatsResponse>("/stats/errors");
+}
+
+/** Thumbnail / preview URL across result kinds. */
+export function resultThumbnail(result: NativeResult): string {
+	if (result.kind === "main") return result.thumbnail;
+	if (result.kind === "image") return result.thumbnail_src || result.img_src;
+	return "";
+}
+
+export function resultImgSrc(result: NativeResult): string {
+	if (result.kind === "image") return result.img_src;
+	return "";
+}
+
+export function resultIframeSrc(result: NativeResult): string {
+	return result.kind === "main" ? result.iframe_src : "";
+}
+
+export function resultFavicon(result: NativeResult): string {
+	return result.kind === "main" ? result.favicon : "";
 }

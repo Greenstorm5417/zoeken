@@ -1,8 +1,15 @@
 # Plan: Native typed search API (SearXNG as compat layer)
 
-Status: proposed  
+Status: **done** (2026-07-22)  
 **Prerequisite:** finish [`architecture-cleanup.md`](architecture-cleanup.md) first (captcha/health/ErrorCategory unify, executor carve-up, registry extraction, **delete Lua + server plugins**, SPA client-features, ResolvedSettings, type consolidation).  
 Related: `docs/compatibility/targets.md`, `zoeken/zoeken-server/src/serialize.rs`, `zoeken-client/src/lib/api.ts`
+
+## Checklist
+
+- [x] Phase 0 — Wire DTOs + mapper + golden/unit fixtures
+- [x] Phase 1 — `POST /api/v1/search` JSON + TypeScript codegen + SPA cutover
+- [x] Phase 2 — MessagePack Accept / `?format=msgpack` (SPA remains JSON by default)
+- [x] Phase 3 — CI drift check, docs, CHANGELOG
 
 ## Goal
 

@@ -6,6 +6,7 @@ import {
 } from "#/components/ResultTemplates";
 import { VideoCard } from "#/components/VideoCard";
 import type { SearchResult } from "#/lib/api";
+import { resultImgSrc, resultThumbnail } from "#/lib/api";
 import { engineNames } from "#/lib/searchDisplay";
 
 type Props = {
@@ -64,7 +65,7 @@ export function SearchResultList({
 		return (
 			<ul className="grid max-w-5xl grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
 				{results
-					.filter((r) => r.thumbnail || r.img_src)
+					.filter((r) => resultThumbnail(r) || resultImgSrc(r))
 					.map((result) => (
 						<li key={result.url}>
 							<button
@@ -73,7 +74,7 @@ export function SearchResultList({
 								className="group block w-full overflow-hidden rounded-xl text-left"
 							>
 								<img
-									src={result.thumbnail || result.img_src}
+									src={resultThumbnail(result) || resultImgSrc(result)}
 									alt={result.title || ""}
 									className="aspect-square w-full bg-surface-raised object-cover transition-transform duration-150 group-hover:scale-[1.01]"
 									loading="lazy"
@@ -81,7 +82,9 @@ export function SearchResultList({
 								<p className="mt-1.5 truncate text-xs text-ink-muted group-hover:text-accent">
 									{result.title || "Image"}
 								</p>
-								{result.resolution && result.resolution !== "unknown" ? (
+								{result.kind === "image" &&
+								result.resolution &&
+								result.resolution !== "unknown" ? (
 									<p className="truncate text-[0.65rem] text-ink-subtle">
 										{result.resolution}
 										{result.img_format ? ` · ${result.img_format}` : ""}

@@ -1,16 +1,38 @@
 import { describe, expect, it } from "vitest";
 import type { SearchResult } from "../api";
+import { mainResult } from "./fixtures";
 import {
 	applyHostnames,
 	type HostnamesRules,
 	sortByPriority,
 } from "./hostnames";
 
-function result(
+function result(url: string): SearchResult {
+	return mainResult({ url });
+}
+
+function imageResult(
 	url: string,
-	overrides: Partial<SearchResult> = {},
+	img_src: string,
+	thumbnail_src: string,
 ): SearchResult {
-	return { url, title: "", ...overrides };
+	return {
+		kind: "image",
+		url,
+		title: "",
+		content: "",
+		engine: "",
+		engines: [],
+		score: 0,
+		positions: [],
+		priority: "",
+		img_src,
+		thumbnail_src,
+		resolution: "",
+		img_format: "",
+		source: "",
+		filesize: "",
+	};
 }
 
 function rules(overrides: Partial<HostnamesRules> = {}): HostnamesRules {
@@ -50,13 +72,9 @@ describe("applyHostnames", () => {
 	});
 
 	it("keeps results with no parseable host untouched", () => {
-		const out = applyHostnames(
-			[result("not a url")],
-			rules({ remove: [".*"] }),
-		);
-		expect(out).toEqual([
-			{ result: { url: "not a url", title: "" }, priority: "normal" },
-		]);
+		const input = result("not a url");
+		const out = applyHostnames([input], rules({ remove: [".*"] }));
+		expect(out).toEqual([{ result: input, priority: "normal" }]);
 	});
 
 	it("rewrites hostnames per the replace map", () => {
@@ -67,18 +85,23 @@ describe("applyHostnames", () => {
 		expect(out[0].result.url).toBe("https://new.example.com/a");
 	});
 
-	it("rewrites img_src and thumbnail alongside url", () => {
+	it("rewrites img_src and thumbnail_src alongside url", () => {
 		const out = applyHostnames(
 			[
-				result("https://old.example.com/a", {
-					img_src: "https://old.example.com/i.png",
-					thumbnail: "https://old.example.com/t.png",
-				}),
+				imageResult(
+					"https://old.example.com/a",
+					"https://old.example.com/i.png",
+					"https://old.example.com/t.png",
+				),
 			],
 			rules({ replace: { "^old\\.example\\.com$": "new.example.com" } }),
 		);
-		expect(out[0].result.img_src).toBe("https://new.example.com/i.png");
-		expect(out[0].result.thumbnail).toBe("https://new.example.com/t.png");
+		const r = out[0].result;
+		expect(r.kind).toBe("image");
+		if (r.kind === "image") {
+			expect(r.img_src).toBe("https://new.example.com/i.png");
+			expect(r.thumbnail_src).toBe("https://new.example.com/t.png");
+		}
 	});
 
 	it("tags high and low priority by host pattern", () => {

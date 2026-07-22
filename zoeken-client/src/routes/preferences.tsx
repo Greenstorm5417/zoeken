@@ -457,7 +457,7 @@ function PreferencesPage() {
 							settings.yml) — not per-browser cookies.
 						</p>
 						{(() => {
-							const h = config.hostnames;
+							const h = config?.hostnames;
 							const hasRules =
 								h &&
 								(Object.keys(h.replace ?? {}).length > 0 ||

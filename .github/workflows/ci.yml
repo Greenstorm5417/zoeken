@@ -73,6 +73,12 @@ jobs:
       - name: Test workspace (incl. conformance + property tests)
         run: cargo test --workspace --locked
 
+      - name: Export native TypeScript bindings
+        run: cargo run --locked -p zoeken-server --bin export-native-ts
+
+      - name: Check native TypeScript bindings are up to date
+        run: git diff --exit-code -- zoeken-client/src/lib/generated/native.ts
+
   postgres-storage:
     name: PostgreSQL storage contract
     runs-on: ubuntu-latest
@@ -137,7 +143,9 @@ jobs:
           cd zoeken-client
           bun install --frozen-lockfile
           bun audit
+          bun run check:generated
           bun run check
+          bun run check:types
           bun run test
           bun run build
           cd ..

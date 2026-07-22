@@ -80,26 +80,33 @@ export function stripTrackerParams(
 	return current;
 }
 
-function cleanField(
-	result: SearchResult,
-	field: "url" | "img_src" | "thumbnail",
-	rules: CompiledRule[],
-): void {
-	const value = result[field];
-	if (!value) return;
-	result[field] = stripTrackerParams(value, rules);
+function clean(value: string, rules: CompiledRule[]): string {
+	return value ? stripTrackerParams(value, rules) : value;
 }
 
-/** Strip trackers from `url` / `img_src` / `thumbnail` on each result. */
+/** Strip trackers from `url` / image fields on each result. */
 export function applyTrackerUrlRemover(
 	results: SearchResult[],
 ): SearchResult[] {
 	const rules = compileRules();
 	return results.map((result) => {
-		const next = { ...result };
-		cleanField(next, "url", rules);
-		cleanField(next, "img_src", rules);
-		cleanField(next, "thumbnail", rules);
-		return next;
+		const url = clean(result.url, rules);
+		switch (result.kind) {
+			case "main":
+				return {
+					...result,
+					url,
+					thumbnail: clean(result.thumbnail, rules),
+				};
+			case "image":
+				return {
+					...result,
+					url,
+					img_src: clean(result.img_src, rules),
+					thumbnail_src: clean(result.thumbnail_src, rules),
+				};
+			default:
+				return { ...result, url };
+		}
 	});
 }

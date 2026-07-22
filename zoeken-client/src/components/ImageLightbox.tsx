@@ -1,6 +1,7 @@
 import { ExternalLink, X } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 import type { SearchResult } from "#/lib/api";
+import { resultImgSrc, resultThumbnail } from "#/lib/api";
 
 function hostnameOf(url: string) {
 	try {
@@ -67,12 +68,15 @@ export function ImageLightbox({
 	}, [onClose]);
 
 	const meta: Array<[string, string]> = [];
-	if (result.resolution) meta.push(["Resolution", result.resolution]);
-	if (result.img_format) meta.push(["Format", result.img_format]);
-	if (result.filesize) meta.push(["Size", result.filesize]);
-	if (result.source) meta.push(["Source", result.source]);
+	if (result.kind === "image") {
+		if (result.resolution) meta.push(["Resolution", result.resolution]);
+		if (result.img_format) meta.push(["Format", result.img_format]);
+		if (result.filesize) meta.push(["Size", result.filesize]);
+		if (result.source) meta.push(["Source", result.source]);
+	}
 
-	const full = result.img_src || result.thumbnail;
+	const imgSrc = resultImgSrc(result);
+	const full = imgSrc || resultThumbnail(result);
 
 	return (
 		<div
@@ -132,9 +136,9 @@ export function ImageLightbox({
 							<ExternalLink className="size-3.5" aria-hidden />
 							{hostnameOf(result.url)}
 						</a>
-						{result.img_src ? (
+						{imgSrc ? (
 							<a
-								href={result.img_src}
+								href={imgSrc}
 								target="_blank"
 								rel="noopener noreferrer"
 								className="text-ink-subtle hover:text-accent"

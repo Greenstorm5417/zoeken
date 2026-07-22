@@ -55,24 +55,37 @@ function rewriteHost(
 	return parsed.toString();
 }
 
-function filterUrlField(
-	result: SearchResult,
-	field: "url" | "img_src" | "thumbnail",
-	rules: HostnamesRules,
-): void {
-	const value = result[field];
-	if (!value) return;
+function filterUrl(value: string, rules: HostnamesRules): string {
+	if (!value) return value;
 	const host = hostOf(value);
-	if (host && anyMatch(host, rules.remove)) {
-		result[field] = "";
-		return;
-	}
+	if (host && anyMatch(host, rules.remove)) return "";
 	let current = value;
 	for (const [pattern, replacement] of Object.entries(rules.replace)) {
 		const rewritten = rewriteHost(current, pattern, replacement);
 		if (rewritten) current = rewritten;
 	}
-	result[field] = current;
+	return current;
+}
+
+function applyUrlRules(result: SearchResult, rules: HostnamesRules): SearchResult {
+	const url = filterUrl(result.url, rules);
+	switch (result.kind) {
+		case "main":
+			return {
+				...result,
+				url,
+				thumbnail: filterUrl(result.thumbnail, rules),
+			};
+		case "image":
+			return {
+				...result,
+				url,
+				img_src: filterUrl(result.img_src, rules),
+				thumbnail_src: filterUrl(result.thumbnail_src, rules),
+			};
+		default:
+			return { ...result, url };
+	}
 }
 
 export type PrioritizedResult = {
@@ -101,10 +114,7 @@ export function applyHostnames(
 		}
 		if (anyMatch(host, rules.remove)) continue;
 
-		const next = { ...result };
-		filterUrlField(next, "url", rules);
-		filterUrlField(next, "img_src", rules);
-		filterUrlField(next, "thumbnail", rules);
+		const next = applyUrlRules(result, rules);
 
 		let priority: PrioritizedResult["priority"] = "normal";
 		if (anyMatch(host, rules.low_priority)) priority = "low";

@@ -38,6 +38,8 @@ export function applyDoiRewrite(
 	const doi = extractDoi(result.url);
 	if (!doi || doi.length >= 50) return result;
 	const next = { ...result, url: resolver + doi };
-	if (next.template === "paper.html" && !next.doi) next.doi = doi;
+	if (next.kind === "paper" && !next.doi) {
+		return { ...next, doi };
+	}
 	return next;
 }

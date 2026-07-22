@@ -18,17 +18,19 @@
   "imports": {
     "#/*": "./src/*"
   },
-  "scripts": {
-    "dev": "vite dev --port 3000",
+	"scripts": {
+		"dev": "vite dev --port 3000",
 		"generate-routes": "tsr generate",
 		"sync-data": "bun scripts/sync-client-data.mjs",
 		"build": "bun run sync-data && vite build",
-    "preview": "vite preview",
-    "test": "vitest run",
-    "format": "biome format",
-    "lint": "biome lint",
-    "check": "biome check"
-  },
+		"preview": "vite preview",
+		"test": "vitest run",
+		"check:types": "tsc --noEmit",
+		"check:generated": "node ./scripts/assert-generated-native.mjs",
+		"format": "biome format",
+		"lint": "biome lint",
+		"check": "biome check"
+	},
   "dependencies": {
     "@tanstack/react-query": "^5.90.2",
     "@tanstack/react-router": "^1.132.0",

@@ -202,6 +202,7 @@ export function computeUnitConverterAnswer(
 	return {
 		answer: `${formatUnitNumber(value)} ${fromUnit.id} = ${formatUnitNumber(result)} ${toUnit.id}`,
 		engine: "unit converter",
+		url: null,
 		interactive: {
 			type: "unit",
 			amount: value,

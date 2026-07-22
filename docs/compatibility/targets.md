@@ -11,10 +11,11 @@ Supported target: API compatibility plus admin/config compatibility.
 
 ## Frontend
 
-Custom SPA (`zoeken-client`) against SearXNG-compatible JSON APIs.
+Custom SPA (`zoeken-client`) against Zoeken native search plus SearXNG-compatible prefs/config.
 
 - Build output: `zoeken/zoeken-server/assets` (not rust-embedded).
-- `/` and `/search?format=html` serve the SPA; results come from `/search?format=json`.
+- `/` and `/search?format=html` serve the SPA; results come from **`POST /api/v1/search`** (typed JSON; optional MessagePack via `Accept` / `?format=msgpack`).
+- External clients keep SearXNG-compatible `/search?format=json|csv|rss`.
 - No Jinja/SearXNG theme parity.
 
 ## Data packaging

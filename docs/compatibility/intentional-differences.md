@@ -148,6 +148,17 @@ Deliberate compatibility gaps between Zoeken and SearXNG.
 - **Behavior**: CORS is not enabled. The SPA is same-origin with the API.
 - **Security posture**: Avoids accidental open CORS.
 
+## Native search API (Zoeken-only)
+
+- **Behavior**: The SPA consumes `POST /api/v1/search` with a typed, tagged
+  result schema (`schema_version`, `kind` unions). This is **not** SearXNG-
+  compatible. External clients keep `/search?format=json|csv|rss`.
+- **Why**: Preserve a frozen-ish compat layer while giving the SPA full field
+  parity (paper citations, torrent `time`, `hl_lines`, corrections/suggestions
+  with engines, etc.) without polluting the legacy bag-of-fields JSON.
+- **Impact**: Third-party JSON clients must continue using `/search?format=json`.
+- **Revisit when**: a public native API version is documented as stable.
+
 ## Image / favicon proxy redirects
 
 - **Behavior**: Both fetchers use `redirect::Policy::none()`. Bodies are size-capped.

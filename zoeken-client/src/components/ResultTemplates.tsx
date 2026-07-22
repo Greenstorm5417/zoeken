@@ -1,5 +1,7 @@
+import type { ComponentType } from "react";
 import { Download, ExternalLink, FileText, Magnet } from "lucide-react";
 import type { SearchResult } from "#/lib/api";
+import { resultFavicon } from "#/lib/api";
 import {
 	engineNames,
 	formatEngineLabel,
@@ -47,11 +49,12 @@ export function TorrentResult({
 	result,
 	newTab,
 }: {
-	result: SearchResult;
+	result: Extract<SearchResult, { kind: "file" }>;
 	newTab?: boolean;
 }) {
 	const stats: string[] = [];
 	if (result.filesize) stats.push(result.filesize);
+	if (result.time) stats.push(result.time);
 	if (typeof result.seed === "number") stats.push(`${result.seed} seeders`);
 	if (typeof result.leech === "number") stats.push(`${result.leech} leechers`);
 	return (
@@ -93,7 +96,7 @@ export function PaperResult({
 	result,
 	newTab,
 }: {
-	result: SearchResult;
+	result: Extract<SearchResult, { kind: "paper" }>;
 	newTab?: boolean;
 }) {
 	const authors = result.authors?.length
@@ -105,7 +108,7 @@ export function PaperResult({
 		authors,
 		result.journal,
 		result.publisher,
-		result.publishedDate?.slice(0, 10),
+		result.published_date?.slice(0, 10),
 	].filter(Boolean) as string[];
 	return (
 		<article className="max-w-[40rem]">
@@ -187,10 +190,11 @@ export function CodeResult({
 	result,
 	newTab,
 }: {
-	result: SearchResult;
+	result: Extract<SearchResult, { kind: "code" }>;
 	newTab?: boolean;
 }) {
 	const lines = result.codelines ?? [];
+	const hl = new Set(result.hl_lines ?? []);
 	return (
 		<article className="max-w-[40rem]">
 			<ResultTitle result={result} newTab={newTab} />
@@ -203,7 +207,13 @@ export function CodeResult({
 				<pre className="mt-2 overflow-x-auto rounded-lg border border-line bg-surface-raised p-3 text-[0.78rem] leading-relaxed">
 					<code>
 						{lines.map(([n, text]) => (
-							<div key={n} className="flex gap-3">
+							<div
+								key={n}
+								className={[
+									"flex gap-3",
+									hl.has(n) ? "bg-accent/10" : "",
+								].join(" ")}
+							>
 								<span className="w-8 shrink-0 select-none text-right text-ink-subtle">
 									{n}
 								</span>
@@ -227,17 +237,30 @@ export function KeyValueResult({
 	result,
 	newTab,
 }: {
-	result: SearchResult;
+	result: Extract<SearchResult, { kind: "key_value" }>;
 	newTab?: boolean;
 }) {
-	const entries = Object.entries(result.kvmap ?? {});
+	const entries = result.kvmap ?? [];
 	return (
 		<article className="max-w-[40rem]">
 			<ResultTitle result={result} newTab={newTab} />
+			{result.caption ? (
+				<p className="mt-1 text-[0.8rem] text-ink-subtle">{result.caption}</p>
+			) : null}
 			{entries.length > 0 ? (
 				<dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-lg border border-line bg-surface-raised p-3 text-[0.85rem]">
+					{result.key_title || result.value_title ? (
+						<div className="contents">
+							<dt className="font-semibold text-ink-subtle">
+								{result.key_title || "Key"}
+							</dt>
+							<dd className="font-semibold text-ink">
+								{result.value_title || "Value"}
+							</dd>
+						</div>
+					) : null}
 					{entries.map(([key, value]) => (
-						<div key={key} className="contents">
+						<div key={`${key}:${value}`} className="contents">
 							<dt className="font-medium text-ink-subtle capitalize">{key}</dt>
 							<dd className="min-w-0 truncate text-ink">{value}</dd>
 						</div>
@@ -307,26 +330,31 @@ export function MapResult({
 	);
 }
 
+type Specialized = ComponentType<{
+	result: SearchResult;
+	newTab?: boolean;
+}>;
+
 /** Pick the specialized template for a result, or `null` for the default. */
-export function specializedTemplate(result: SearchResult, category?: string) {
-	switch (result.template) {
-		case "file.html":
-		case "files.html":
-			return TorrentResult;
-		case "paper.html":
-			return PaperResult;
-		case "code.html":
-			return CodeResult;
-		case "keyvalue.html":
-			return KeyValueResult;
-		case "products.html":
-		case "product.html":
-			return ProductResult;
+export function specializedTemplate(
+	result: SearchResult,
+	category?: string,
+): Specialized | null {
+	switch (result.kind) {
+		case "file":
+			return TorrentResult as Specialized;
+		case "paper":
+			return PaperResult as Specialized;
+		case "code":
+			return CodeResult as Specialized;
+		case "key_value":
+			return KeyValueResult as Specialized;
+		case "main":
+			if (category === "shopping" || result.category === "shopping") {
+				return ProductResult;
+			}
+			return null;
 		default:
-			// Torrents sometimes arrive without a template but with a magnet link.
-			if (result.magnetlink) return TorrentResult;
-			// ebay/geizhals put price in content — no dedicated product fields.
-			if (category === "shopping") return ProductResult;
 			return null;
 	}
 }
@@ -358,6 +386,9 @@ export function ResultItem({
 			: urlFormatting === "host"
 				? host
 				: `${host}${crumbs ? ` > ${crumbs}` : ""}`;
+	const favicon = resultFavicon(result);
+	const thumb =
+		result.kind === "main" && result.thumbnail ? result.thumbnail : "";
 
 	return (
 		<article className="max-w-[40rem]">
@@ -369,9 +400,9 @@ export function ResultItem({
 				className="group block no-underline"
 			>
 				<div className="flex items-center gap-2.5">
-					{result.favicon ? (
+					{favicon ? (
 						<img
-							src={result.favicon}
+							src={favicon}
 							alt=""
 							width={20}
 							height={20}
@@ -395,6 +426,14 @@ export function ResultItem({
 					{result.title}
 				</h2>
 			</a>
+			{thumb ? (
+				<img
+					src={thumb}
+					alt=""
+					className="mt-2 max-h-28 rounded-lg object-cover"
+					loading="lazy"
+				/>
+			) : null}
 			{result.content ? (
 				<p className="mt-1.5 line-clamp-2 text-[0.9rem] leading-relaxed text-ink-muted">
 					{result.content}

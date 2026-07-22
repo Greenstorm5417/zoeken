@@ -188,7 +188,7 @@ function SearchPage() {
 		activeCategory === "images" ||
 		Boolean(
 			results.length &&
-				results.every((r) => r.img_src) &&
+				results.every((r) => r.kind === "image") &&
 				activeCategory !== "videos",
 		);
 	const videoMode =
@@ -197,10 +197,11 @@ function SearchPage() {
 			results.length &&
 				results.every(
 					(r) =>
-						r.template === "videos.html" ||
-						Boolean(r.iframe_src) ||
-						(Boolean(r.thumbnail) && !r.img_src),
-				),
+						r.kind === "main" &&
+						(Boolean(r.iframe_src) ||
+							(Boolean(r.thumbnail) && !r.iframe_src)),
+				) &&
+				results.some((r) => r.kind === "main" && Boolean(r.iframe_src)),
 		);
 	const mapMode = activeCategory === "map";
 	const errorStatus =
@@ -504,15 +505,15 @@ function SearchPage() {
 								{t.enginesDidntRespond}
 							</p>
 							<ul className="mt-2 divide-y divide-line/60">
-								{firstPage.unresponsive_engines.map(([engine, reason]) => (
+								{firstPage.unresponsive_engines.map(({ engine, cause }) => (
 									<li
-										key={`${engine}:${reason}`}
+										key={`${engine}:${cause}`}
 										className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5 text-sm"
 									>
 										<span className="font-medium capitalize text-ink">
 											{formatEngineLabel(engine)}
 										</span>
-										<span className="text-ink-muted">{reason}</span>
+										<span className="text-ink-muted">{cause}</span>
 									</li>
 								))}
 							</ul>

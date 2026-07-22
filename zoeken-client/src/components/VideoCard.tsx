@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SearchResult } from "#/lib/api";
+import { resultIframeSrc, resultThumbnail } from "#/lib/api";
 import { engineNames, formatEngineLabel } from "#/lib/searchDisplay";
 
 /** Sandboxed click-to-play video card when `iframe_src` is present. */
@@ -11,8 +12,8 @@ export function VideoCard({
 	newTab?: boolean;
 }) {
 	const [playing, setPlaying] = useState(false);
-	const thumb = result.thumbnail || result.img_src;
-	const embed = result.iframe_src?.trim();
+	const thumb = resultThumbnail(result);
+	const embed = resultIframeSrc(result).trim();
 
 	return (
 		<article className="overflow-hidden rounded-xl border border-line bg-surface-raised">

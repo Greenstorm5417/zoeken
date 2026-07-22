@@ -201,10 +201,10 @@ export function computeDateTimeAnswer(query: string): SearchAnswer | null {
 	};
 
 	const days = daysUntil(text, today);
-	if (days) return { answer: days, engine: "date math" };
+	if (days) return { answer: days, engine: "date math", url: null, interactive: null };
 
 	const zone = zoneConvert(text);
-	if (zone) return { answer: zone, engine: "time zones" };
+	if (zone) return { answer: zone, engine: "time zones", url: null, interactive: null };
 
 	return null;
 }

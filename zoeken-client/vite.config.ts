@@ -29,6 +29,7 @@ export default defineConfig(async ({ mode }) => {
 			port: 3000,
 			proxy: {
 				// SearXNG-compatible API surface on zoeken-server (default :8888).
+				"/api": "http://127.0.0.1:8888",
 				"/search": "http://127.0.0.1:8888",
 				"/autocompleter": "http://127.0.0.1:8888",
 				"/config": "http://127.0.0.1:8888",

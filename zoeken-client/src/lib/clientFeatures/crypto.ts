@@ -216,5 +216,5 @@ export function computeCryptoAnswer(query: string): SearchAnswer | null {
 		algorithm: parsed.algorithm,
 		input: parsed.input,
 	};
-	return { answer: hint, engine: "hash_plugin", interactive };
+	return { answer: hint, engine: "hash_plugin", url: null, interactive };
 }

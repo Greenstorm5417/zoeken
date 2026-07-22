@@ -12,17 +12,20 @@ function stubFetch(mock: ReturnType<typeof vi.fn>) {
 }
 
 describe("API client", () => {
-	it("serializes search filters", async () => {
+	it("posts native JSON search body", async () => {
 		const fetch = vi.fn().mockResolvedValue(
 			new Response(
 				JSON.stringify({
+					schema_version: 1,
 					query: "rust",
+					number_of_results: 0,
 					results: [],
 					answers: [],
 					corrections: [],
 					infoboxes: [],
 					suggestions: [],
 					unresponsive_engines: [],
+					engine_data: {},
 				}),
 			),
 		);
@@ -35,12 +38,21 @@ describe("API client", () => {
 			safesearch: 2,
 		});
 
-		expect(fetch).toHaveBeenCalledWith("/search", expect.any(Object));
+		expect(fetch).toHaveBeenCalledWith("/api/v1/search", expect.any(Object));
 		const init = fetch.mock.calls[0]?.[1] as RequestInit;
 		expect(init.method).toBe("POST");
-		expect(String(init.body)).toBe(
-			"q=rust+search&format=json&pageno=2&safesearch=2&categories=it",
-		);
+		expect(init.headers).toMatchObject({
+			"Content-Type": "application/json",
+		});
+		expect(JSON.parse(String(init.body))).toEqual({
+			q: "rust search",
+			pageno: 2,
+			language: null,
+			safesearch: 2,
+			categories: "it",
+			time_range: null,
+			engines: null,
+		});
 	});
 
 	it("surfaces non-success responses as ApiError", async () => {

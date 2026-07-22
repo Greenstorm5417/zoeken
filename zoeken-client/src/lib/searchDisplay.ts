@@ -1,5 +1,5 @@
 /** Small presentational helpers shared by the search route's result views. */
-import type { SearchResult } from "./api";
+import type { NativeCorrection, NativeSuggestion, SearchResult } from "./api";
 import type { SearchRouteParams } from "./searchParams";
 import { serializeSearchParams } from "./searchParams";
 
@@ -17,11 +17,11 @@ export const DEFAULT_CATEGORIES = [
 	"shopping",
 ] as const;
 
-export function suggestionText(s: string | { suggestion: string }) {
+export function suggestionText(s: string | NativeSuggestion) {
 	return typeof s === "string" ? s : s.suggestion;
 }
 
-export function correctionText(c: string | { correction: string }) {
+export function correctionText(c: string | NativeCorrection) {
 	return typeof c === "string" ? c : c.correction;
 }
 

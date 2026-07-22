@@ -50,6 +50,7 @@ export function computeSelfInfoAnswer(
 		return {
 			answer: ip ? `Your IP is: ${ip}` : "Your IP is unavailable",
 			engine: "self_info",
+			url: null,
 			interactive: { type: "self_info", kind: "ip", value: ip },
 		};
 	}
@@ -60,6 +61,7 @@ export function computeSelfInfoAnswer(
 				? `Your user-agent is: ${userAgent}`
 				: "Your user-agent is unavailable",
 			engine: "self_info",
+			url: null,
 			interactive: { type: "self_info", kind: "user_agent", value: userAgent },
 		};
 	}
